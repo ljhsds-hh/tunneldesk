@@ -1,0 +1,23 @@
+{
+  "name": "tunneldesk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TunnelDesk - SSH-based port mapping and intranet HTTP proxy console",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "npm --workspace web run build",
+    "build:server": "npm --workspace server run build",
+    "start": "node server/dist/index.js",
+    "dev:server": "npm --workspace server run dev",
+    "dev:web": "npm --workspace web run dev",
+    "test": "npm --workspace server run test",
+    "typecheck": "npm --workspace server run typecheck && npm --workspace web run typecheck"
+  }
+}
