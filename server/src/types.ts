@@ -7,9 +7,13 @@ export type LinkState =
   | 'offline'
   | 'error';
 
+export type ConnectionType = 'ssh' | 'azure-bastion';
+
 export interface HostConfig {
   id: string;
   name: string;
+  /** 直连 SSH，或经 Azure Bastion 的本地 50022 隧道。 */
+  connectionType: ConnectionType;
   host: string;
   port: number;
   username: string;
@@ -18,6 +22,65 @@ export interface HostConfig {
   hostKeyFingerprint: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * 全局唯一的 Azure Bastion 配置。`rdpPasswordCipher` 是 DPAPI 密文的
+ * base64 形式，只允许留在服务端；下发给前端时会被剔除。
+ */
+export interface BastionProfile {
+  name: string;
+  resourceGroup: string;
+  targetResourceId: string;
+  rdpUsername: string;
+  rdpPasswordCipher: string | null;
+  autoStartTunnel: boolean;
+  updatedAt: string;
+}
+
+/** 可安全下发给前端的 Bastion 配置（不含密文）。 */
+export interface BastionPublicProfile {
+  name: string;
+  resourceGroup: string;
+  targetResourceId: string;
+  rdpUsername: string;
+  hasRdpPassword: boolean;
+  autoStartTunnel: boolean;
+  updatedAt: string;
+}
+
+export type TunnelPhase = 'idle' | 'starting' | 'ready' | 'restarting' | 'failed';
+
+export interface PortOwnerInfo {
+  pid: number;
+  name: string;
+}
+
+export interface BastionTunnelState {
+  phase: TunnelPhase;
+  localPort: number;
+  resourcePort: number;
+  pid: number | null;
+  since: string | null;
+  lastError: string | null;
+  restartAttempt: number;
+  portOwner: PortOwnerInfo | null;
+  diagnostics: string[];
+}
+
+export interface RdpSessionInfo {
+  id: string;
+  localPort: number;
+  pid: number | null;
+  state: 'starting' | 'ready' | 'failed';
+  startedAt: string;
+  lastError: string | null;
+}
+
+export interface BastionSnapshot {
+  profile: BastionPublicProfile | null;
+  tunnel: BastionTunnelState;
+  rdpSessions: RdpSessionInfo[];
 }
 
 export interface MappingConfig {
@@ -55,6 +118,7 @@ export interface AppConfig {
   hosts: HostConfig[];
   mappings: MappingConfig[];
   proxy: ProxySettings;
+  bastion: BastionProfile | null;
   settings: {
     theme: 'dark' | 'light';
     startProxyOnBoot: boolean;
@@ -133,6 +197,7 @@ export interface AppSnapshot {
     fingerprint: string | null;
   };
   host: HostConfig | null;
+  bastion: BastionSnapshot;
   mappings: Array<MappingConfig & { runtime: MappingRuntime }>;
   proxy: ProxySettings & { runtime: ProxyRuntime };
   firewall: {

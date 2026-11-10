@@ -219,7 +219,7 @@ export default function App() {
               </span>
               <StatusPill state={snap?.link.state ?? 'idle'} detail={snap?.link.lastError} />
             </div>
-            <span className="sidebar__version">v0.1.0 · 本地控制台</span>
+            <span className="sidebar__version">v0.2.0 · 本地控制台</span>
           </div>
         </aside>
 

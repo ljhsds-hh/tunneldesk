@@ -32,6 +32,7 @@ export class SshLink extends EventEmitter {
   private autoReconnect = true;
   private timer: NodeJS.Timeout | null = null;
   private fingerprint: string | null = null;
+  private generation = 0;
 
   constructor(private readonly logger: Logger) {
     super();
@@ -62,10 +63,21 @@ export class SshLink extends EventEmitter {
     this.host = host;
     this.manualStop = false;
     this.attempt = 0;
-    await this.open();
+    const generation = ++this.generation;
+    const existing = this.client;
+    this.client = null;
+    if (existing) {
+      try {
+        existing.end();
+      } catch {
+        existing.destroy();
+      }
+    }
+    await this.open(generation);
   }
 
   disconnect(): void {
+    this.generation += 1;
     this.manualStop = true;
     this.clearTimer();
     const client = this.client;
@@ -111,7 +123,8 @@ export class SshLink extends EventEmitter {
     return execOnClient(client, command, timeoutMs);
   }
 
-  private async open(): Promise<void> {
+  private async open(generation: number): Promise<void> {
+    if (generation !== this.generation) return;
     this.clearTimer();
     const host = this.host;
     if (!host) throw new Error('未配置主机');
@@ -136,6 +149,11 @@ export class SshLink extends EventEmitter {
         username: host.username,
         privateKeyPem: privateKey.toString('utf8'),
       });
+      // 连接期间用户可能已断开或切换到别的主机；丢弃过期连接，避免双连接与泄漏。
+      if (generation !== this.generation || this.manualStop) {
+        result.client.end();
+        return;
+      }
       this.client = result.client;
       this.fingerprint = result.hostKeyFingerprint;
       resolved = true;
@@ -147,13 +165,14 @@ export class SshLink extends EventEmitter {
       this.attachLifecycle(result.client);
       this.emit('online');
     } catch (error) {
+      if (generation !== this.generation) return;
       const message = (error as Error).message;
       this.lastError = message;
       this.client = null;
       this.logger.error('ssh', `连接失败：${message}`);
       this.setState('reconnecting');
       if (!resolved) {
-        this.scheduleReconnect();
+        this.scheduleReconnect(generation);
         throw error;
       }
     }
@@ -179,7 +198,7 @@ export class SshLink extends EventEmitter {
     });
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(generation = this.generation): void {
     if (this.manualStop || !this.autoReconnect) {
       this.setState('offline');
       return;
@@ -188,7 +207,7 @@ export class SshLink extends EventEmitter {
     this.attempt += 1;
     this.clearTimer();
     this.timer = setTimeout(() => {
-      this.open().catch(() => undefined);
+      this.open(generation).catch(() => undefined);
     }, delay);
   }
 

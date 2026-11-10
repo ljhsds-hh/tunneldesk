@@ -7,9 +7,12 @@ export type LinkState =
   | 'offline'
   | 'error';
 
+export type ConnectionType = 'ssh' | 'azure-bastion';
+
 export interface HostConfig {
   id: string;
   name: string;
+  connectionType: ConnectionType;
   host: string;
   port: number;
   username: string;
@@ -18,6 +21,50 @@ export interface HostConfig {
   hostKeyFingerprint: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BastionPublicProfile {
+  name: string;
+  resourceGroup: string;
+  targetResourceId: string;
+  rdpUsername: string;
+  hasRdpPassword: boolean;
+  autoStartTunnel: boolean;
+  updatedAt: string;
+}
+
+export type TunnelPhase = 'idle' | 'starting' | 'ready' | 'restarting' | 'failed';
+
+export interface PortOwnerInfo {
+  pid: number;
+  name: string;
+}
+
+export interface BastionTunnelState {
+  phase: TunnelPhase;
+  localPort: number;
+  resourcePort: number;
+  pid: number | null;
+  since: string | null;
+  lastError: string | null;
+  restartAttempt: number;
+  portOwner: PortOwnerInfo | null;
+  diagnostics: string[];
+}
+
+export interface RdpSessionInfo {
+  id: string;
+  localPort: number;
+  pid: number | null;
+  state: 'starting' | 'ready' | 'failed';
+  startedAt: string;
+  lastError: string | null;
+}
+
+export interface BastionSnapshot {
+  profile: BastionPublicProfile | null;
+  tunnel: BastionTunnelState;
+  rdpSessions: RdpSessionInfo[];
 }
 
 export interface MappingRuntime {
@@ -119,6 +166,7 @@ export interface AppSnapshot {
     fingerprint: string | null;
   };
   host: HostConfig | null;
+  bastion: BastionSnapshot;
   mappings: Mapping[];
   proxy: ProxySettings;
   firewall: {

@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import type { AppConfig, HostConfig, MappingConfig, ProxySettings } from '../types.js';
+import type { AppConfig, BastionProfile, HostConfig, MappingConfig, ProxySettings } from '../types.js';
 import { writeFileAtomicAsync } from '../util/atomic.js';
 import { appDataDir, ensureDir } from '../util/paths.js';
+import { validateBastionInput } from '../bastion/validate.js';
+import { BASTION_LOCAL_PORT } from '../bastion/command.js';
 
-const CONFIG_VERSION = 1;
+const CONFIG_VERSION = 2;
 
 export function defaultConfig(): AppConfig {
   return {
@@ -22,6 +24,7 @@ export function defaultConfig(): AppConfig {
       routingMode: 'all',
       whitelist: [],
     },
+    bastion: null,
     settings: {
       theme: 'dark',
       startProxyOnBoot: false,
@@ -47,6 +50,7 @@ function coerceConfig(raw: unknown): AppConfig {
       ? (input.mappings.map(coerceMapping).filter(Boolean) as MappingConfig[])
       : [],
     proxy: sanitizeProxy((input.proxy ?? {}) as Partial<ProxySettings>, fallback.proxy),
+    bastion: coerceBastion(input.bastion),
     settings: { ...fallback.settings, ...(input.settings ?? {}) },
   };
 }
@@ -55,11 +59,14 @@ function coerceHost(value: unknown): HostConfig | null {
   if (!value || typeof value !== 'object') return null;
   const host = value as Partial<HostConfig>;
   if (!host.id || !host.host || !host.username || !host.keyPath) return null;
+  const connectionType = host.connectionType === 'azure-bastion' ? 'azure-bastion' : 'ssh';
   return {
     id: String(host.id),
     name: String(host.name ?? host.host),
-    host: String(host.host),
-    port: Number(host.port ?? 22),
+    connectionType,
+    // Bastion 主机固定走本地隧道，旧配置里即使写错了地址也纠正回来。
+    host: connectionType === 'azure-bastion' ? '127.0.0.1' : String(host.host),
+    port: connectionType === 'azure-bastion' ? BASTION_LOCAL_PORT : Number(host.port ?? 22),
     username: String(host.username),
     keyPath: String(host.keyPath),
     keyComment: String(host.keyComment ?? 'tunneldesk'),
@@ -68,6 +75,33 @@ function coerceHost(value: unknown): HostConfig | null {
     updatedAt: String(host.updatedAt ?? new Date().toISOString()),
   };
 }
+
+export function coerceBastion(value: unknown): BastionProfile | null {
+  if (!value || typeof value !== 'object') return null;
+  const input = value as Partial<BastionProfile>;
+  let validated: ReturnType<typeof validateBastionInput>;
+  try {
+    validated = validateBastionInput({
+      name: input.name,
+      resourceGroup: input.resourceGroup,
+      targetResourceId: input.targetResourceId,
+      rdpUsername: input.rdpUsername,
+    });
+  } catch {
+    // 配置被手工改坏时宁可不加载，也不把可疑值拼进 az 命令。
+    return null;
+  }
+  const cipher = typeof input.rdpPasswordCipher === 'string' && input.rdpPasswordCipher.trim()
+    ? input.rdpPasswordCipher.trim()
+    : null;
+  return {
+    ...validated,
+    rdpPasswordCipher: cipher,
+    autoStartTunnel: input.autoStartTunnel === undefined ? true : Boolean(input.autoStartTunnel),
+    updatedAt: String(input.updatedAt ?? new Date().toISOString()),
+  };
+}
+
 
 function coerceMapping(value: unknown): MappingConfig | null {
   if (!value || typeof value !== 'object') return null;
@@ -201,4 +235,5 @@ export function clampPort(value: number, fallback: number): number {
 export function ensureAppDirs(): void {
   ensureDir(appDataDir());
   ensureDir(path.join(appDataDir(), 'keys'));
+  ensureDir(path.join(appDataDir(), 'rdp'));
 }

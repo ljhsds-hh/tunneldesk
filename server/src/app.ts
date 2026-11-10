@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import type {
   AppConfig,
   AppSnapshot,
+  BastionProfile,
+  BastionPublicProfile,
+  ConnectionType,
   HostConfig,
   MappingConfig,
   ProxySettings,
@@ -18,13 +21,35 @@ import { provisionHost, verifyKeyLogin } from './ssh/provision.js';
 import { FirewallManager, type FirewallDesiredPort } from './firewall/manager.js';
 import { ForwardManager } from './forward/manager.js';
 import { HttpProxyServer } from './proxy/httpProxy.js';
+import { BastionManager, publicBastionProfile } from './bastion/manager.js';
+import { BASTION_LOCAL_PORT } from './bastion/command.js';
+import { encryptPassword } from './bastion/dpapi.js';
+import { cleanRdpDir } from './bastion/rdp.js';
+import { validateBastionInput } from './bastion/validate.js';
 
 export interface SetupHostInput {
   name?: string;
+  connectionType?: ConnectionType;
   host: string;
   port: number;
   username: string;
   password: string;
+}
+
+export interface BastionInput {
+  name?: string;
+  resourceGroup?: string;
+  targetResourceId?: string;
+  rdpUsername?: string;
+  rdpPassword?: string;
+  clearRdpPassword?: boolean;
+  autoStartTunnel?: boolean;
+}
+
+export interface HostConnectionInput {
+  connectionType: ConnectionType;
+  host?: string;
+  port?: number;
 }
 
 export interface MappingInput {
@@ -59,6 +84,7 @@ export class App extends EventEmitter {
   readonly forward: ForwardManager;
   readonly firewall: FirewallManager;
   readonly proxy: HttpProxyServer;
+  readonly bastion: BastionManager;
   readonly startedAt = Date.now();
 
   private ticker: NodeJS.Timeout | null = null;
@@ -74,16 +100,30 @@ export class App extends EventEmitter {
     this.firewall = new FirewallManager(this.link, this.logger);
     const settings = defaultConfig().proxy;
     this.proxy = new HttpProxyServer(this.link, this.logger, settings);
+    this.bastion = new BastionManager({
+      logger: this.logger,
+      profile: () => this.store.get().bastion,
+      dataDir: () => appDataDir(),
+    });
 
     this.link.on('state', () => this.emit('change'));
     this.link.on('online', () => {
       void this.handleOnline();
+    });
+    this.bastion.on('change', () => this.emit('change'));
+    this.bastion.on('down', () => {
+      // 隧道不可用时暂停 SSH 自动重连，避免对 127.0.0.1:50022 的必然失败重试。
+      this.link.setAutoReconnect(false);
+    });
+    this.bastion.on('ready', () => {
+      void this.handleBastionReady();
     });
     this.store.on('warning', (message: string) => this.logger.warn('config', message));
   }
 
   async init(): Promise<void> {
     ensureAppDirs();
+    cleanRdpDir(path.join(appDataDir(), 'rdp'));
     const config = await this.store.load();
     this.link.setAutoReconnect(config.settings.reconnect);
     await this.forward.sync(config.mappings);
@@ -93,7 +133,19 @@ export class App extends EventEmitter {
     }
 
     const host = this.store.getActiveHost();
-    if (host && config.settings.reconnect) {
+    if (host && host.connectionType === 'azure-bastion') {
+      const profile = config.bastion;
+      if (!profile) {
+        this.logger.warn('bastion', 'Bastion 配置缺失，请在「连接管理」重新保存配置');
+      } else if (profile.autoStartTunnel) {
+        this.logger.info('app', `正在启动 Azure Bastion 隧道（${BASTION_LOCAL_PORT}）`);
+        void this.bastion.ensure().catch((error: Error) => {
+          this.logger.warn('bastion', `隧道自动启动失败：${error.message}`);
+        });
+      } else {
+        this.logger.info('bastion', '自动启动已关闭，请先手动启动 50022 隧道');
+      }
+    } else if (host && config.settings.reconnect) {
       this.logger.info('app', `正在连接 ${host.name} (${host.host}:${host.port})`);
       this.link.connect(host).catch(() => undefined);
     }
@@ -105,6 +157,7 @@ export class App extends EventEmitter {
   async shutdown(): Promise<void> {
     if (this.ticker) clearInterval(this.ticker);
     this.link.disconnect();
+    await this.bastion.shutdown();
     await this.proxy.stop();
     await this.forward.stopAll();
   }
@@ -127,6 +180,7 @@ export class App extends EventEmitter {
       settings: config.settings,
       link: { ...this.link.info(), hostLabel: host?.name ?? null },
       host,
+      bastion: this.bastion.snapshot(),
       mappings,
       proxy: {
         ...config.proxy,
@@ -154,12 +208,29 @@ export class App extends EventEmitter {
   // ---------------------------------------------------------------- hosts
 
   async setupHost(input: SetupHostInput): Promise<HostConfig> {
-    const host = String(input.host ?? '').trim();
+    const connectionType: ConnectionType =
+      input.connectionType === 'azure-bastion' ? 'azure-bastion' : 'ssh';
     const username = String(input.username ?? '').trim();
-    const port = clampPort(input.port, 22);
-    if (!isValidHostname(host)) throw new AppError('主机地址不合法');
+    let host = String(input.host ?? '').trim();
+    let port = clampPort(input.port, 22);
+
     if (!username) throw new AppError('请填写 SSH 用户名');
     if (!input.password) throw new AppError('请填写 SSH 密码');
+
+    if (connectionType === 'azure-bastion') {
+      const profile = this.store.get().bastion;
+      if (!profile) throw new AppError('请先完成 Azure Bastion 配置', 409);
+      host = '127.0.0.1';
+      port = BASTION_LOCAL_PORT;
+      try {
+        await this.bastion.ensure();
+      } catch (error) {
+        throw new AppError(`Azure Bastion 隧道不可用：${(error as Error).message}`, 502);
+      }
+    } else {
+      if (!isValidHostname(host)) throw new AppError('主机地址不合法');
+    }
+
     if (
       this.store.get().hosts.some(
         (item) => item.host === host && item.username === username && item.port === port,
@@ -191,6 +262,7 @@ export class App extends EventEmitter {
     const record: HostConfig = {
       id,
       name: (input.name ?? host).trim() || host,
+      connectionType,
       host,
       port,
       username,
@@ -207,6 +279,8 @@ export class App extends EventEmitter {
     });
 
     this.logger.info('host', `密钥登录已配置完成：${record.name}`);
+    this.link.disconnect();
+    this.link.setAutoReconnect(this.store.get().settings.reconnect);
     await this.link.connect(record).catch((error: Error) => {
       this.logger.warn('host', `首次连接失败：${error.message}`);
     });
@@ -221,7 +295,65 @@ export class App extends EventEmitter {
     await this.store.update((draft) => {
       draft.activeHostId = id;
     });
+    await this.prepareBastion(host);
+    this.link.setAutoReconnect(this.store.get().settings.reconnect);
     await this.link.connect(host).catch(() => undefined);
+  }
+
+  async updateHostConnection(id: string, input: HostConnectionInput): Promise<void> {
+    const existing = this.store.getHost(id);
+    if (!existing) throw new AppError('主机不存在', 404);
+    if (input.connectionType !== 'ssh' && input.connectionType !== 'azure-bastion') {
+      throw new AppError('连接方式不合法');
+    }
+
+    let host = existing.host;
+    let port = existing.port;
+    if (input.connectionType === 'azure-bastion') {
+      if (!this.store.get().bastion) throw new AppError('请先完成 Azure Bastion 配置', 409);
+      host = '127.0.0.1';
+      port = BASTION_LOCAL_PORT;
+    } else {
+      if (input.host !== undefined) host = String(input.host).trim();
+      if (input.port !== undefined) port = clampPort(input.port, existing.port);
+      if (!isValidHostname(host)) throw new AppError('主机地址不合法');
+      if (!isValidPort(port)) throw new AppError('SSH 端口不合法');
+    }
+
+    if (
+      this.store.get().hosts.some(
+        (item) =>
+          item.id !== id &&
+          item.host === host &&
+          item.port === port &&
+          item.username === existing.username,
+      )
+    ) {
+      throw new AppError('已存在相同地址与用户名的主机，请先删除旧配置');
+    }
+
+    const wasActive = this.store.get().activeHostId === id;
+    if (wasActive) this.link.disconnect();
+    await this.store.update((draft) => {
+      const record = draft.hosts.find((item) => item.id === id);
+      if (!record) throw new AppError('主机不存在', 404);
+      record.connectionType = input.connectionType;
+      record.host = host;
+      record.port = port;
+      record.updatedAt = new Date().toISOString();
+    });
+    this.emit('change');
+
+    if (!wasActive) return;
+    const updated = this.store.getHost(id);
+    if (!updated) return;
+    try {
+      await this.prepareBastion(updated);
+    } catch (error) {
+      this.logger.warn('host', `连接方式已切换，但隧道未就绪：${(error as Error).message}`);
+      return;
+    }
+    await this.link.connect(updated).catch(() => undefined);
   }
 
   async renameHost(id: string, name: string): Promise<void> {
@@ -260,6 +392,7 @@ export class App extends EventEmitter {
     const host = this.store.getActiveHost();
     if (!host) throw new AppError('尚未配置主机');
     this.link.setAutoReconnect(this.store.get().settings.reconnect);
+    await this.prepareBastion(host);
     await this.link.connect(host);
   }
 
@@ -270,11 +403,138 @@ export class App extends EventEmitter {
   async testHost(id: string): Promise<{ ok: boolean; message: string }> {
     const host = this.store.getHost(id);
     if (!host) throw new AppError('主机不存在', 404);
+    await this.prepareBastion(host);
     const ok = await verifyKeyLogin(host);
     return {
       ok,
       message: ok ? '密钥登录正常，SSH 通道可用' : '密钥登录失败，请检查 B 的 OpenSSH 配置或重新配置密钥',
     };
+  }
+
+  // -------------------------------------------------------------- bastion
+
+  async saveBastion(input: BastionInput): Promise<BastionPublicProfile> {
+    const existing = this.store.get().bastion;
+    let validated: ReturnType<typeof validateBastionInput>;
+    try {
+      validated = validateBastionInput({
+        name: input.name !== undefined ? input.name : existing?.name,
+        resourceGroup: input.resourceGroup !== undefined ? input.resourceGroup : existing?.resourceGroup,
+        targetResourceId:
+          input.targetResourceId !== undefined ? input.targetResourceId : existing?.targetResourceId,
+        rdpUsername: input.rdpUsername !== undefined ? input.rdpUsername : existing?.rdpUsername,
+      });
+    } catch (error) {
+      throw new AppError((error as Error).message, 400);
+    }
+    if (input.rdpPassword && input.rdpPassword.length > 256) {
+      throw new AppError('RDP 密码过长（最多 256 个字符）', 400);
+    }
+
+    let cipher = existing?.rdpPasswordCipher ?? null;
+    if (input.clearRdpPassword) cipher = null;
+    if (input.rdpPassword) {
+      try {
+        cipher = await encryptPassword(input.rdpPassword);
+      } catch (error) {
+        throw new AppError((error as Error).message, 500);
+      }
+    }
+
+    const targetChanged = Boolean(
+      existing &&
+        (existing.name !== validated.name ||
+          existing.resourceGroup !== validated.resourceGroup ||
+          existing.targetResourceId !== validated.targetResourceId),
+    );
+
+    const profile: BastionProfile = {
+      ...validated,
+      rdpPasswordCipher: cipher,
+      autoStartTunnel: input.autoStartTunnel ?? existing?.autoStartTunnel ?? true,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (targetChanged) {
+      this.link.disconnect();
+      await this.bastion.stopAll();
+    }
+
+    await this.store.update((draft) => {
+      draft.bastion = profile;
+    });
+    this.emit('change');
+
+    if (targetChanged) {
+      const host = this.store.getActiveHost();
+      if (host?.connectionType === 'azure-bastion' && profile.autoStartTunnel) {
+        void this.bastion.ensure().catch((error: Error) => {
+          this.logger.warn('bastion', `隧道重新启动失败：${error.message}`);
+        });
+      }
+    }
+    return publicBastionProfile(profile) as BastionPublicProfile;
+  }
+
+  async resetBastion(): Promise<void> {
+    if (!this.store.get().bastion) throw new AppError('尚未配置 Azure Bastion', 404);
+    this.link.disconnect();
+    await this.bastion.stopAll();
+    cleanRdpDir(path.join(appDataDir(), 'rdp'));
+    await this.store.update((draft) => {
+      draft.bastion = null;
+    });
+    this.logger.info('bastion', 'Azure Bastion 配置已重置');
+    this.emit('change');
+  }
+
+  async startBastionTunnel(): Promise<void> {
+    if (!this.store.get().bastion) throw new AppError('尚未配置 Azure Bastion', 409);
+    try {
+      await this.bastion.ensure();
+    } catch (error) {
+      throw new AppError((error as Error).message, 502);
+    }
+  }
+
+  async stopBastionTunnel(): Promise<void> {
+    this.link.disconnect();
+    await this.bastion.stop();
+  }
+
+  async killBastionPortOwner(): Promise<void> {
+    if (!this.store.get().bastion) throw new AppError('尚未配置 Azure Bastion', 409);
+    this.link.disconnect();
+    try {
+      await this.bastion.killPortOwner();
+    } catch (error) {
+      throw new AppError((error as Error).message, 502);
+    }
+  }
+
+  async openRdp(): Promise<{ id: string; localPort: number }> {
+    if (!this.store.get().bastion) throw new AppError('尚未配置 Azure Bastion', 409);
+    try {
+      const session = await this.bastion.openRdp();
+      return { id: session.id, localPort: session.localPort };
+    } catch (error) {
+      throw new AppError((error as Error).message, 502);
+    }
+  }
+
+  private async prepareBastion(host: HostConfig): Promise<void> {
+    if (host.connectionType !== 'azure-bastion') return;
+    const profile = this.store.get().bastion;
+    if (!profile) throw new AppError('请先完成 Azure Bastion 配置', 409);
+    if (!profile.autoStartTunnel) {
+      if (!this.bastion.isReady()) throw new AppError('请先启动 50022 隧道', 409);
+      return;
+    }
+    try {
+      await this.bastion.ensure();
+    } catch (error) {
+      throw new AppError((error as Error).message, 502);
+    }
   }
 
   // ------------------------------------------------------------- mappings
@@ -432,13 +692,29 @@ export class App extends EventEmitter {
     await this.store.update((draft) => {
       draft.settings = { ...draft.settings, ...input };
     });
-    this.link.setAutoReconnect(this.store.get().settings.reconnect);
+    const settings = this.store.get().settings;
+    const host = this.store.getActiveHost();
+    const tunnelDown = host?.connectionType === 'azure-bastion' && !this.bastion.isReady();
+    this.link.setAutoReconnect(tunnelDown ? false : settings.reconnect);
     this.emit('change');
-    return this.store.get().settings;
+    return settings;
   }
 
   dataDir(): string {
     return appDataDir();
+  }
+
+  private async handleBastionReady(): Promise<void> {
+    const config = this.store.get();
+    const host = this.store.getActiveHost();
+    if (!host || host.connectionType !== 'azure-bastion') return;
+    this.link.setAutoReconnect(config.settings.reconnect);
+    if (!config.settings.reconnect) return;
+    if (this.link.isOnline()) return;
+    this.logger.info('app', 'Bastion 隧道已就绪，正在恢复 SSH 连接');
+    await this.link.connect(host).catch((error: Error) => {
+      this.logger.warn('app', `SSH 连接失败：${error.message}`);
+    });
   }
 
   private async handleOnline(): Promise<void> {

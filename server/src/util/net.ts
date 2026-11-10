@@ -15,6 +15,24 @@ export function isPortFree(port: number, address = '127.0.0.1'): Promise<boolean
   });
 }
 
+/** Resolves true when a TCP connection to host:port succeeds within the timeout. */
+export function probeTcp(port: number, host = '127.0.0.1', timeoutMs = 1000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ port, host });
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
+}
+
 /** Finds the first free port at or above the preferred port (max 200 attempts). */
 export async function findFreePort(preferred: number, address = '127.0.0.1'): Promise<number | null> {
   for (let offset = 0; offset < 200; offset += 1) {

@@ -18,15 +18,32 @@ async function request<T>(path: string, method = 'GET', body?: unknown): Promise
 export const api = {
   state: () => request<AppSnapshot>('/api/state'),
 
-  setupHost: (input: { name?: string; host: string; port: number; username: string; password: string }) =>
-    request<{ host: unknown }>('/api/hosts', 'POST', input),
+  setupHost: (input: {
+    name?: string;
+    connectionType?: 'ssh' | 'azure-bastion';
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+  }) => request<{ host: unknown }>('/api/hosts', 'POST', input),
 
   activateHost: (id: string) => request<{ ok: boolean }>(`/api/hosts/${id}/activate`, 'POST'),
   connect: (id: string) => request<{ ok: boolean }>(`/api/hosts/${id}/connect`, 'POST'),
   disconnect: (id: string) => request<{ ok: boolean }>(`/api/hosts/${id}/disconnect`, 'POST'),
   testHost: (id: string) => request<{ ok: boolean; message: string }>(`/api/hosts/${id}/test`, 'POST'),
   renameHost: (id: string, name: string) => request<{ ok: boolean }>(`/api/hosts/${id}`, 'PATCH', { name }),
+  updateHostConnection: (
+    id: string,
+    input: { connectionType: 'ssh' | 'azure-bastion'; host?: string; port?: number },
+  ) => request<{ ok: boolean }>(`/api/hosts/${id}/connection`, 'PUT', input),
   removeHost: (id: string) => request<{ ok: boolean }>(`/api/hosts/${id}`, 'DELETE'),
+
+  saveBastion: (input: Record<string, unknown>) => request<{ profile: unknown }>('/api/bastion', 'PUT', input),
+  resetBastion: () => request<{ ok: boolean }>('/api/bastion', 'DELETE'),
+  startBastionTunnel: () => request<{ ok: boolean }>('/api/bastion/tunnel/start', 'POST'),
+  stopBastionTunnel: () => request<{ ok: boolean }>('/api/bastion/tunnel/stop', 'POST'),
+  killBastionPortOwner: () => request<{ ok: boolean }>('/api/bastion/tunnel/kill-owner', 'POST'),
+  openRdp: () => request<{ id: string; localPort: number }>('/api/bastion/rdp', 'POST'),
 
   createMapping: (input: Record<string, unknown>) =>
     request<{ mapping: unknown }>('/api/mappings', 'POST', input),

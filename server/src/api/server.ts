@@ -119,12 +119,34 @@ async function handleApi(app: App, req: http.IncomingMessage, res: http.ServerRe
     const body = await readJson(req);
     const host = await app.setupHost({
       name: asString(body.name),
+      connectionType:
+        body.connectionType === 'azure-bastion'
+          ? 'azure-bastion'
+          : body.connectionType === 'ssh'
+            ? 'ssh'
+            : undefined,
       host: asString(body.host),
       port: Number(body.port ?? 22),
       username: asString(body.username),
       password: asString(body.password),
     });
     sendJson(res, 201, { host });
+    return;
+  }
+
+  const hostConnectionMatch = pathname.match(/^\/api\/hosts\/([^/]+)\/connection$/);
+  if (hostConnectionMatch && method === 'PUT') {
+    const id = decodeURIComponent(hostConnectionMatch[1] ?? '');
+    const body = await readJson(req);
+    if (body.connectionType !== 'ssh' && body.connectionType !== 'azure-bastion') {
+      throw new AppError('连接方式不合法');
+    }
+    await app.updateHostConnection(id, {
+      connectionType: body.connectionType,
+      host: body.host === undefined ? undefined : asString(body.host),
+      port: body.port === undefined ? undefined : Number(body.port),
+    });
+    sendJson(res, 200, { ok: true });
     return;
   }
 
@@ -238,6 +260,51 @@ async function handleApi(app: App, req: http.IncomingMessage, res: http.ServerRe
       reconnect: body.reconnect === undefined ? undefined : Boolean(body.reconnect),
     });
     sendJson(res, 200, { settings });
+    return;
+  }
+
+  if (method === 'PUT' && pathname === '/api/bastion') {
+    const body = await readJson(req);
+    const profile = await app.saveBastion({
+      name: body.name === undefined ? undefined : asString(body.name),
+      resourceGroup: body.resourceGroup === undefined ? undefined : asString(body.resourceGroup),
+      targetResourceId:
+        body.targetResourceId === undefined ? undefined : asString(body.targetResourceId),
+      rdpUsername: body.rdpUsername === undefined ? undefined : asString(body.rdpUsername),
+      rdpPassword: body.rdpPassword === undefined ? undefined : asString(body.rdpPassword),
+      clearRdpPassword: body.clearRdpPassword === undefined ? undefined : Boolean(body.clearRdpPassword),
+      autoStartTunnel: body.autoStartTunnel === undefined ? undefined : Boolean(body.autoStartTunnel),
+    });
+    sendJson(res, 200, { profile });
+    return;
+  }
+
+  if (method === 'DELETE' && pathname === '/api/bastion') {
+    await app.resetBastion();
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (method === 'POST' && pathname === '/api/bastion/tunnel/start') {
+    await app.startBastionTunnel();
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (method === 'POST' && pathname === '/api/bastion/tunnel/stop') {
+    await app.stopBastionTunnel();
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (method === 'POST' && pathname === '/api/bastion/tunnel/kill-owner') {
+    await app.killBastionPortOwner();
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (method === 'POST' && pathname === '/api/bastion/rdp') {
+    sendJson(res, 200, await app.openRdp());
     return;
   }
 

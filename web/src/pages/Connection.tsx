@@ -25,6 +25,8 @@ import {
   Toggle,
 } from '../ui';
 import { useApp } from '../App';
+import { BastionCard } from './BastionCard';
+import type { ConnectionType } from '../types';
 
 const REMEDIATION = `# 在电脑 B 上以「管理员身份」打开 PowerShell，执行一次：
 New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' \`
@@ -32,7 +34,14 @@ New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Pol
 
 export function ConnectionPage() {
   const { snap, refresh, toast } = useApp();
-  const [form, setForm] = useState({ name: '', host: '', port: '22', username: '', password: '' });
+  const [form, setForm] = useState({
+    name: '',
+    connectionType: 'ssh' as ConnectionType,
+    host: '',
+    port: '22',
+    username: '',
+    password: '',
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
@@ -40,28 +49,42 @@ export function ConnectionPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState('');
+  const [editType, setEditType] = useState<ConnectionType>('ssh');
+  const [editHost, setEditHost] = useState('');
+  const [editPort, setEditPort] = useState('22');
+  const [editError, setEditError] = useState<string | null>(null);
 
   const host = snap?.host ?? null;
   const link = snap?.link;
   const online = link?.state === 'online';
+  const bastionProfile = snap?.bastion.profile ?? null;
+  const bastionHost = host?.connectionType === 'azure-bastion';
+  const tunnelReady = snap?.bastion.tunnel.phase === 'ready';
 
   const submit = async () => {
+    const connectionType = form.connectionType;
     const port = Number(form.port);
-    if (!form.host.trim()) return setError('请填写电脑 B 的地址');
+    if (connectionType === 'azure-bastion' && !bastionProfile) {
+      return setError('请先在下方保存 Azure Bastion 配置');
+    }
+    if (connectionType === 'ssh' && !form.host.trim()) return setError('请填写电脑 B 的地址');
     if (!form.username.trim()) return setError('请填写 SSH 用户名');
     if (!form.password) return setError('请填写一次性密码，用于安装公钥');
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return setError('SSH 端口不合法');
+    if (connectionType === 'ssh' && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      return setError('SSH 端口不合法');
+    }
     setSaving(true);
     setError(null);
     try {
       await api.setupHost({
-        name: form.name.trim() || form.host.trim(),
-        host: form.host.trim(),
-        port,
+        name: form.name.trim() || (connectionType === 'azure-bastion' ? 'Azure Bastion' : form.host.trim()),
+        connectionType,
+        host: connectionType === 'azure-bastion' ? '127.0.0.1' : form.host.trim(),
+        port: connectionType === 'azure-bastion' ? 50022 : port,
         username: form.username.trim(),
         password: form.password,
       });
-      setForm({ name: '', host: '', port: '22', username: '', password: '' });
+      setForm({ name: '', connectionType, host: '', port: '22', username: '', password: '' });
       toast('主机已配置，密钥登录生效', 'ok');
       await refresh();
     } catch (err) {
@@ -131,14 +154,50 @@ export function ConnectionPage() {
 
   const rename = async () => {
     if (!host) return;
+    setEditError(null);
+    if (editType === 'azure-bastion' && !bastionProfile) {
+      setEditError('请先在下方保存 Azure Bastion 配置');
+      return;
+    }
+    const nextPort = Number(editPort);
+    if (editType === 'ssh') {
+      if (!editHost.trim()) {
+        setEditError('请填写 B 的地址');
+        return;
+      }
+      if (!Number.isInteger(nextPort) || nextPort < 1 || nextPort > 65535) {
+        setEditError('SSH 端口不合法');
+        return;
+      }
+    }
     try {
-      await api.renameHost(host.id, renameValue);
+      if (renameValue.trim() !== host.name) {
+        await api.renameHost(host.id, renameValue);
+      }
+      const addressChanged =
+        editType === 'ssh' && (editHost.trim() !== host.host || nextPort !== host.port);
+      if (editType !== host.connectionType || addressChanged) {
+        await api.updateHostConnection(host.id, {
+          connectionType: editType,
+          ...(editType === 'ssh' ? { host: editHost.trim(), port: nextPort } : {}),
+        });
+      }
       setRenameOpen(false);
-      toast('名称已更新', 'ok');
+      toast('主机设置已更新', 'ok');
       await refresh();
     } catch (err) {
-      toast((err as Error).message, 'error');
+      setEditError((err as Error).message);
     }
+  };
+
+  const openHostSettings = () => {
+    if (!host) return;
+    setRenameValue(host.name);
+    setEditType(host.connectionType);
+    setEditHost(host.host);
+    setEditPort(String(host.port));
+    setEditError(null);
+    setRenameOpen(true);
   };
 
   const rulesByMapping = new Map<string, { inbound: boolean; outbound: boolean; port: number }>();
@@ -161,7 +220,7 @@ export function ConnectionPage() {
       <PageHeader
         eyebrow="INFRASTRUCTURE"
         title="连接管理"
-        description="B 端不需要安装任何程序：程序复用系统自带的 OpenSSH，通过密钥登录并自动管理防火墙规则。"
+        description="B 端不需要安装任何程序：SSH 直连复用系统自带 OpenSSH；Azure Bastion 方式由程序托管 50022 隧道，并可直接打开远程桌面。"
         actions={
           host ? (
             <>
@@ -182,6 +241,8 @@ export function ConnectionPage() {
         }
       />
 
+      <BastionCard />
+
       {!host ? (
         <div className="grid grid--two grid--wide-left">
           <Card className="panel">
@@ -193,6 +254,24 @@ export function ConnectionPage() {
               <IconKey size={16} className="muted" />
             </div>
             <div className="form">
+              <Field label="连接方式" hint="微软方式需要先在上方保存 Bastion 配置">
+                <div className="segmented">
+                  <button
+                    type="button"
+                    className={form.connectionType === 'ssh' ? 'is-active' : ''}
+                    onClick={() => setForm({ ...form, connectionType: 'ssh' })}
+                  >
+                    SSH 直连
+                  </button>
+                  <button
+                    type="button"
+                    className={form.connectionType === 'azure-bastion' ? 'is-active' : ''}
+                    onClick={() => setForm({ ...form, connectionType: 'azure-bastion' })}
+                  >
+                    Azure Bastion
+                  </button>
+                </div>
+              </Field>
               <Field label="显示名称" hint="例如「Azure 跳板机」">
                 <input
                   className="input"
@@ -201,25 +280,41 @@ export function ConnectionPage() {
                   placeholder="电脑 B"
                 />
               </Field>
-              <div className="form__row">
-                <Field label="B 的地址" hint="IP 或主机名">
-                  <input
-                    className="input input--mono"
-                    value={form.host}
-                    onChange={(event) => setForm({ ...form, host: event.target.value })}
-                    placeholder="20.x.x.x"
-                    spellCheck={false}
-                  />
-                </Field>
-                <Field label="SSH 端口" hint="默认 22；Bastion 转发时填本地端口">
-                  <input
-                    className="input input--mono"
-                    value={form.port}
-                    onChange={(event) => setForm({ ...form, port: event.target.value })}
-                    inputMode="numeric"
-                  />
-                </Field>
-              </div>
+              {form.connectionType === 'azure-bastion' ? (
+                <>
+                  <div className="form__row">
+                    <Field label="本地地址" hint="由程序固定，不允许修改">
+                      <input className="input input--mono" value="127.0.0.1" readOnly />
+                    </Field>
+                    <Field label="本地端口" hint="50022 隧道就绪后才能登录">
+                      <input className="input input--mono" value="50022" readOnly />
+                    </Field>
+                  </div>
+                  {!bastionProfile ? (
+                    <p className="form__error">尚未保存 Azure Bastion 配置，请先在上方完成配置。</p>
+                  ) : null}
+                </>
+              ) : (
+                <div className="form__row">
+                  <Field label="B 的地址" hint="IP 或主机名">
+                    <input
+                      className="input input--mono"
+                      value={form.host}
+                      onChange={(event) => setForm({ ...form, host: event.target.value })}
+                      placeholder="20.x.x.x"
+                      spellCheck={false}
+                    />
+                  </Field>
+                  <Field label="SSH 端口" hint="默认 22">
+                    <input
+                      className="input input--mono"
+                      value={form.port}
+                      onChange={(event) => setForm({ ...form, port: event.target.value })}
+                      inputMode="numeric"
+                    />
+                  </Field>
+                </div>
+              )}
               <div className="form__row">
                 <Field label="用户名" hint="B 的 Windows 登录账号">
                   <input
@@ -289,16 +384,13 @@ export function ConnectionPage() {
                   <p className="mono">
                     {host.username}@{host.host}:{host.port}
                   </p>
+                  <Badge tone={bastionHost ? 'accent' : 'neutral'}>
+                    {bastionHost ? 'Azure Bastion' : 'SSH 直连'}
+                  </Badge>
                 </div>
                 <StatusPill state={link?.state ?? 'idle'} detail={link?.lastError} />
                 <div className="host-card__actions">
-                  <IconButton
-                    label="重命名"
-                    onClick={() => {
-                      setRenameValue(host.name);
-                      setRenameOpen(true);
-                    }}
-                  >
+                  <IconButton label="主机设置" onClick={openHostSettings}>
                     <IconEdit size={15} />
                   </IconButton>
                   <IconButton label="删除主机" tone="danger" onClick={() => setConfirmDelete(true)}>
@@ -313,6 +405,10 @@ export function ConnectionPage() {
                   <strong>{online ? '在线' : link?.state === 'reconnecting' ? '重连中' : '离线'}</strong>
                 </div>
                 <div>
+                  <span>连接方式</span>
+                  <strong>{bastionHost ? 'Azure Bastion（50022）' : 'SSH 直连'}</strong>
+                </div>
+                <div>
                   <span>已保持</span>
                   <strong>{link?.since ? formatRelative(link.since).replace('前', '') : '—'}</strong>
                 </div>
@@ -325,6 +421,17 @@ export function ConnectionPage() {
                   <strong className="mono ellipsis">{host.keyPath}</strong>
                 </div>
               </div>
+
+              {bastionHost && !tunnelReady ? (
+                <div className="callout callout--warn">
+                  <IconBolt size={15} />
+                  <p>
+                    {bastionProfile?.autoStartTunnel
+                      ? '50022 隧道尚未就绪，SSH 连接会在隧道启动后自动恢复。'
+                      : '自动启动已关闭：请先在上方点「启动 50022」，再连接 SSH。'}
+                  </p>
+                </div>
+              ) : null}
 
               {link?.lastError ? (
                 <div className="callout callout--warn">
@@ -427,8 +534,8 @@ export function ConnectionPage() {
 
       <Drawer
         open={renameOpen}
-        title="重命名主机"
-        subtitle="仅修改显示名称，不影响连接"
+        title="主机设置"
+        subtitle="可修改显示名称与连接方式；切换连接方式会断开并重连，已安装的密钥与指纹保持不变"
         onClose={() => setRenameOpen(false)}
         footer={
           <>
@@ -444,6 +551,51 @@ export function ConnectionPage() {
         <Field label="名称">
           <input className="input" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
         </Field>
+        <Field label="连接方式" hint="切换为 Azure Bastion 前需要先保存 Bastion 配置">
+          <div className="segmented">
+            <button
+              type="button"
+              className={editType === 'ssh' ? 'is-active' : ''}
+              onClick={() => setEditType('ssh')}
+            >
+              SSH 直连
+            </button>
+            <button
+              type="button"
+              className={editType === 'azure-bastion' ? 'is-active' : ''}
+              onClick={() => setEditType('azure-bastion')}
+            >
+              Azure Bastion
+            </button>
+          </div>
+        </Field>
+        {editType === 'ssh' ? (
+          <div className="form__row">
+            <Field label="B 的地址" hint="IP 或主机名">
+              <input
+                className="input input--mono"
+                value={editHost}
+                onChange={(event) => setEditHost(event.target.value)}
+                placeholder="20.x.x.x"
+                spellCheck={false}
+              />
+            </Field>
+            <Field label="SSH 端口" hint="默认 22">
+              <input
+                className="input input--mono"
+                value={editPort}
+                onChange={(event) => setEditPort(event.target.value)}
+                inputMode="numeric"
+              />
+            </Field>
+          </div>
+        ) : (
+          <p className="muted small">Azure Bastion 方式的地址与端口固定为 127.0.0.1:50022。</p>
+        )}
+        {editType === 'azure-bastion' && !bastionProfile ? (
+          <p className="form__error">尚未保存 Azure Bastion 配置，请先在上方完成配置。</p>
+        ) : null}
+        {editError ? <p className="form__error">{editError}</p> : null}
       </Drawer>
 
       <ConfirmDialog

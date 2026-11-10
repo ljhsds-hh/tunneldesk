@@ -5,6 +5,7 @@ TunnelDesk 是一个面向个人工作流的 SSH 访问控制台，用来把「�
 - **端口映射**：把 B 上的服务端口映射到 A 的 `127.0.0.1:<本地端口>`，本机应用像访问本地服务一样使用它。
 - **内网代理**：在本机开一个 HTTP 代理，请求经 B 的 DNS 与网络出口发出，从而访问只有 B 能访问的内网 HTTP 服务（含 HTTPS CONNECT）。
 - **代理分流**：提供 PAC 脚本，可按固定 IPv4 白名单只让指定内网地址走 B，其余网站保持 A 直连。
+- **Azure Bastion 接入（v0.2）**：程序内托管 50022 隧道，并可一键打开已预填凭据的远程桌面，不需要在外部手动运行 `.bat`。
 
 两个业务在界面上完全分开，共用同一条 SSH 连接。**B 端不需要安装任何程序、不注册服务、不新增监听端口。**
 
@@ -30,7 +31,7 @@ TunnelDesk 是一个面向个人工作流的 SSH 访问控制台，用来把「�
 | 电脑 B | Windows 11，**OpenSSH Server** 已启用并可登录，账号具备管理员权限 |
 | 网络 | A 能通过 TCP 访问 B 的 SSH 端口（Bastion 场景见第 4 节） |
 
-A 上只有 Node.js 一个运行时依赖；不需要 Python、.NET、Go、Rust。
+A 上 SSH 直连只需 Node.js；使用 Azure Bastion 方式时另需安装 Azure CLI（≥ 2.32）并执行 `az login`。不需要 Python、.NET、Go、Rust。
 
 ---
 
@@ -101,28 +102,35 @@ Get-Service sshd
 
 ## 4. Azure Bastion 场景
 
-需求明确 **不能修改 Azure VM 的相关配置**（NSG、Bastion、入站规则），因此 TunnelDesk 不依赖任何新增入站端口，全部复用 SSH：
+需求明确 **不能修改 Azure VM 的相关配置**（NSG、Bastion、入站规则），因此 TunnelDesk 不依赖任何新增入站端口。v0.2 起程序内置两种连接方式：
 
-**方式一（推荐）：Bastion 本地端口转发**
+**方式一（推荐，v0.2 新增）：程序托管的 Azure Bastion**
 
-```powershell
-az network bastion tunnel `
-  --name <bastion-name> `
-  --resource-group <resource-group> `
-  --target-resource-id <vm-resource-id> `
-  --resource-port 22 `
-  --port 50022
-```
+1. 在「连接管理 → Azure Bastion」保存三个值：Bastion 名称、资源组、VM 资源 ID，以及可选的 RDP 账号/密码。
+2. 新建主机时选择「Azure Bastion」。地址与端口由程序固定为 `127.0.0.1:50022`，不允许编辑。
+3. 程序会自动执行并托管：
 
-然后在 TunnelDesk 中填写：
+   ```powershell
+   az network bastion tunnel `
+     --name <bastion-name> `
+     --resource-group <resource-group> `
+     --target-resource-id <vm-resource-id> `
+     --resource-port 22 `
+     --port 50022
+   ```
 
-- B 的地址：`127.0.0.1`
-- SSH 端口：`50022`
-- 用户名 / 密码：B 的 Windows 账号
+4. 隧道就绪后自动完成首次密码换密钥；此后 SSH、端口映射、内网代理都复用这条隧道。
+5. 「远程桌面」按钮会临时建立 3389 隧道并打开 `mstsc`；RDP 账号与密码自动预填，不需要重新输入。
 
-**方式二：A 能直连 B:22**（例如已通过其他方式打通），直接填写 B 的 IP 与 `22`。
+前提：A 上安装 Azure CLI（≥ 2.32）并执行过 `az login`，`az` 在 PATH 中；Bastion 为标准 SKU 且已启用 native client。
 
-程序里的 `host/port` 是普通连接参数，切换方式不需要改代码。
+> 三个 Bastion 参数只保存在 `%APPDATA%\TunnelDesk\config.json`，不会进入仓库、日志或诊断输出；配置卡片默认打码显示。RDP 密码只以 Windows DPAPI 密文保存。
+>
+> 该路径已在真实 Azure 环境中实测通过：`--resource-port 22 --port 50022` 建立后，TunnelDesk 以 `127.0.0.1:50022` 正常连接，端口映射与内网代理同时可用。
+
+**方式二：SSH 直连（原有行为）**
+
+A 能直连 B:22 时，直接选择「SSH 直连」，填写 B 的地址与 `22`。若仍想用外部 `.bat` 手动起 Bastion 隧道，也可以选择 SSH 直连并填写 `127.0.0.1:50022`，行为与 v0.1 完全一致。
 
 ---
 
@@ -133,7 +141,7 @@ az network bastion tunnel `
 | 概览 | 链路健康、在线时长、实时吞吐曲线、两个业务的独立指标、最近事件 |
 | 端口映射 | 映射卡片、新建/编辑抽屉、端口占用校验、自动挑选空闲端口、启停开关、单映射流量 |
 | 内网代理 | 总开关、代理地址复制、PAC 白名单分流、B 侧连通性探测、使用示例、实时请求日志（可按失败过滤） |
-| 连接管理 | 主机信息、密钥与指纹、连接/断开/测试、防火墙规则对账与权限修复提示 |
+| 连接管理 | 主机信息、密钥与指纹、连接/断开/测试、防火墙规则对账与权限修复提示；Azure Bastion 配置、50022 隧道状态/诊断、远程桌面 |
 | 设置 | 深/浅主题、自动重连、日志保留条数、数据目录与备份说明 |
 
 实时指标通过 SSE 每秒推送一次，不做轮询；页面切换与抽屉使用 150–250ms 的过渡，支持 `prefers-reduced-motion`。
@@ -148,6 +156,8 @@ az network bastion tunnel `
 - 主机指纹在首次连接时记录（TOFU），展示在「连接管理」中；当前版本不做指纹变更阻断，迁移主机时请人工核对。
 - 端口映射默认只绑定 `127.0.0.1`；代理默认只允许本机，开启「局域网访问」才会绑定 `0.0.0.0`。
 - 远程命令通过 SSH `exec` + PowerShell `-EncodedCommand` 下发，避免引号注入；所有命令有超时与退出码检查。
+- Azure Bastion 的三个参数（Bastion 名称、资源组、VM 资源 ID）只保存在本机配置目录，日志、错误与诊断输出统一替换为 `***`；配置卡片默认打码。
+- RDP 密码只以 Windows DPAPI（CurrentUser）密文保存，`.rdp` 文件只写入密文对应的十六进制 blob，不落明文；程序退出时删除临时 `.rdp`。
 - 日志自动脱敏 `password=...` 与 PEM 私钥块。
 
 ---
@@ -156,8 +166,9 @@ az network bastion tunnel `
 
 | 内容 | 路径 |
 | --- | --- |
-| 配置 | `%APPDATA%\TunnelDesk\config.json` |
+| 配置 | `%APPDATA%\TunnelDesk\config.json`（含 Azure Bastion 配置与 DPAPI 密码密文） |
 | 私钥 | `%APPDATA%\TunnelDesk\keys\` |
+| 临时远程桌面文件 | `%APPDATA%\TunnelDesk\rdp\`（会话结束/程序退出时删除） |
 | 覆盖数据目录 | 环境变量 `TUNNELDESK_DATA_DIR`（测试/便携模式） |
 
 配置采用「临时文件 + rename」原子写入；读取失败会备份为 `config.json.corrupt-<时间戳>` 并回退默认值。
@@ -175,6 +186,7 @@ tunneldesk/
 │  │  ├─ app.ts            应用服务：主机、映射、代理、快照聚合
 │  │  ├─ api/server.ts     REST + SSE + 静态资源
 │  │  ├─ ssh/              link（状态机/重连）、provision、keys、client
+│  │  ├─ bastion/          az 隧道、RDP、DPAPI、打码、配置校验
 │  │  ├─ forward/          本地监听与 direct-tcpip 转发
 │  │  ├─ proxy/            HTTP / CONNECT 代理、探测、日志
 │  │  ├─ firewall/         规则下发、对账、孤儿清理
@@ -220,17 +232,33 @@ node tools\e2e-smoke.mjs
 
 模拟服务只用于开发验证，不会进入生产路径。真实环境请按第 3、4 节在 B 上验证一次 RDP/HTTP 与内网域名。
 
+### 真实环境验证（2026-11-10）
+
+在真实 Windows 环境下完成了一次端到端验收，以下项目均已实测通过：
+
+| 项目 | 结果 |
+| --- | --- |
+| Azure Bastion 接入 | `az network bastion tunnel --resource-port 22 --port 50022` 建立后，控制台以 `127.0.0.1:50022` 正常连接，无需改动 VM / NSG / Bastion |
+| 端口映射 | A 本地监听端口 → B 侧目标端口端到端可用 |
+| 内网代理（HTTP / HTTPS CONNECT） | 在 A 的系统代理中填入 `127.0.0.1:8888` 后，网页访问直接成功，请求确实经 B 的 DNS 与网络出口发出 |
+| PAC 白名单分流 | 命中白名单的地址走 B，未命中地址保持 A 直连，在真实系统代理设置下生效 |
+| 防火墙规则生命周期 | 此前已在局域网真实主机上验证：创建映射生成入站/出站规则，删除映射后规则全部清理 |
+
+尚未覆盖的部分（SOCKS5 / UDP、反向映射、多主机并行、指纹变更阻断等）见第 10 节。
+
 ---
 
-## 10. 已知限制（v0.1）
+## 10. 已知限制（v0.2）
 
 - 代理仅支持 HTTP 与 HTTPS CONNECT，**不支持 SOCKS5 / UDP**。
 - PAC 白名单只支持固定 IPv4 精确匹配，单次最多 200 个，不支持域名、网段或端口；PAC 只对遵循系统代理设置的程序生效，并可能被浏览器缓存。
 - 仅支持「A → B」方向，不做反向映射。
 - 无系统托盘、无开机自启、无安装包与自动更新。
 - 单用户、单活动主机；多主机配置会保留，但同时只连接一台。
+- Azure Bastion 只支持**一套全局配置、一台 VM**；不提供多 VM 切换，也不做 `az vm start` 开机。
+- 远程桌面与 DPAPI 加密仅支持 Windows；RDP 会话依赖 3389 隧道，关闭 TunnelDesk 后桌面会断开。
 - 主机指纹仅首次记录并展示，不做变更告警。
-- 真实 Azure Bastion 环境因权限原因未在本机完成自动化验证；逻辑链路已由 mock SSH 服务端覆盖。
+- 自动化回归仍以 mock SSH 服务端为主；真实环境已完成的验证范围见第 9 节「真实环境验证」。
 - 若 B 的 OpenSSH 禁用了密码登录，当前版本需手动导入密钥后编辑配置（界面暂无「使用已有密钥」入口）。
 
 ---
@@ -241,7 +269,13 @@ node tools\e2e-smoke.mjs
 | --- | --- |
 | 提示「Access is denied / 拒绝访问」 | B 的远程会话没有管理员令牌，按 3.1 执行一次注册表修复，或关闭该映射的防火墙同步 |
 | 映射显示「本地端口已被占用」 | 在编辑抽屉中换一个端口；「新建映射」会自动挑选 13389 起的空闲端口 |
-| 连接一直「重连中」 | 检查 A→B 的 SSH 端口；Bastion 方式下确认 `az network bastion tunnel` 仍在运行 |
+| 连接一直「重连中」 | 检查 A→B 的 SSH 端口；Bastion 方式下确认 50022 隧道处于「就绪」，未就绪时先点「启动 50022」 |
+| 提示「未找到 Azure CLI（az）」 | 在 A 上安装 Azure CLI（≥ 2.32），确认 `az` 在 PATH 中，必要时重开启动窗口 |
+| 提示「Azure CLI 未登录」 | 在命令行执行 `az login`；多订阅时用 `az account set` 选择正确订阅后重试 |
+| 提示「端口 50022 被 xxx(PID) 占用」 | 点击配置卡片里的「一键停止并重连」；若确认是其他程序，先关闭它再启动 |
+| 50022 隧道反复重连后停止 | 点「az 诊断输出」查看最近 200 行输出（已打码），确认 az 登录、订阅与 VM 资源 ID |
+| 点「远程桌面」没有弹窗 | 确认 `mstsc.exe` 可用、3389 隧道能就绪；错误会以 toast 和诊断输出给出 |
+| 远程桌面对话框仍要求输密码 | 在 Bastion 配置里保存 RDP 账号与密码；密码密文换 Windows 账号/机器后无法解密，需要重新填写 |
 | 代理能开但访问 502 | 目标地址需从 **B** 侧可达；用「连通性测试」验证，注意内网 DNS 只在 B 上生效 |
 | 密钥登录失败（All configured authentication methods failed） | B 的 `authorized_keys` 可能带 UTF-8 BOM，或管理员账号没有写入 `administrators_authorized_keys`；在 B 上用管理员 PowerShell 以无 BOM 方式重写公钥，并写入 `administrators_authorized_keys` 后修正权限 |
 | 浏览器提示需要认证/无法使用代理 | 确认客户端走的是 HTTP 代理而非 SOCKS；HTTPS 站点需允许 CONNECT |
