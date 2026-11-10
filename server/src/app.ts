@@ -18,7 +18,7 @@ import { appDataDir, keysDir, newId } from './util/paths.js';
 import { isPortFree, isValidHostname, isValidPort } from './util/net.js';
 import { SshLink } from './ssh/link.js';
 import { provisionHost, verifyKeyLogin } from './ssh/provision.js';
-import { FirewallManager, type FirewallDesiredPort } from './firewall/manager.js';
+import { FirewallManager, firewallEligible, type FirewallDesiredPort } from './firewall/manager.js';
 import { ForwardManager } from './forward/manager.js';
 import { HttpProxyServer } from './proxy/httpProxy.js';
 import { BastionManager, publicBastionProfile } from './bastion/manager.js';
@@ -88,6 +88,8 @@ export class App extends EventEmitter {
   readonly startedAt = Date.now();
 
   private ticker: NodeJS.Timeout | null = null;
+  private firewallTimer: NodeJS.Timeout | null = null;
+  private firewallChain: Promise<unknown> = Promise.resolve();
   private previous = new Map<string, { bytesIn: number; bytesOut: number }>();
   private previousProxy = { bytesIn: 0, bytesOut: 0 };
   private rates = new Map<string, { rateIn: number; rateOut: number }>();
@@ -152,10 +154,18 @@ export class App extends EventEmitter {
 
     this.ticker = setInterval(() => this.tick(), 1000);
     this.ticker.unref();
+
+    // Low-frequency reconciliation catches rules left behind after a crash or power loss.
+    this.firewallTimer = setInterval(() => {
+      if (!this.link.isOnline()) return;
+      void this.syncFirewall().catch(() => undefined);
+    }, 60 * 60 * 1000);
+    this.firewallTimer.unref();
   }
 
   async shutdown(): Promise<void> {
     if (this.ticker) clearInterval(this.ticker);
+    if (this.firewallTimer) clearInterval(this.firewallTimer);
     this.link.disconnect();
     await this.bastion.shutdown();
     await this.proxy.stop();
@@ -615,7 +625,9 @@ export class App extends EventEmitter {
     }
 
     const portChanged = targetPort !== existing.targetPort && existing.syncFirewall;
-    if (portChanged) await this.firewall.removeMapping(id).catch(() => undefined);
+    if (portChanged) {
+      await this.enqueueFirewall(() => this.firewall.removeMapping(id)).catch(() => undefined);
+    }
 
     await this.store.update((draft) => {
       const mapping = draft.mappings.find((item) => item.id === id);
@@ -645,7 +657,7 @@ export class App extends EventEmitter {
     });
     await this.forward.sync(this.store.get().mappings);
     if (this.link.isOnline()) {
-      await this.firewall.removeMapping(id).catch(() => undefined);
+      await this.enqueueFirewall(() => this.firewall.removeMapping(id)).catch(() => undefined);
     }
     await this.syncFirewall().catch(() => undefined);
     this.logger.info('mapping', `已删除映射 ${mapping.name}，并清理 B 侧防火墙规则`);
@@ -679,13 +691,26 @@ export class App extends EventEmitter {
     return this.proxy.probe(url);
   }
 
-  async syncFirewall(): Promise<{ added: number; removed: number }> {
-    if (!this.link.isOnline()) return { added: 0, removed: 0 };
-    const desired: FirewallDesiredPort[] = this.store
-      .get()
-      .mappings.filter((mapping) => mapping.enabled && mapping.syncFirewall)
-      .map((mapping) => ({ mappingId: mapping.id, port: mapping.targetPort }));
-    return this.firewall.sync(desired);
+  /** Every B-side firewall command - removal, reconciliation and the hourly sweep - shares this chain. */
+  private enqueueFirewall<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.firewallChain.then(fn, fn);
+    this.firewallChain = next.catch(() => undefined);
+    return next;
+  }
+
+  syncFirewall(): Promise<{ added: number; removed: number }> {
+    return this.enqueueFirewall(async () => {
+      if (!this.link.isOnline()) return { added: 0, removed: 0 };
+      const desired: FirewallDesiredPort[] = this.store
+        .get()
+        .mappings.filter(firewallEligible)
+        .map((mapping) => ({
+          mappingId: mapping.id,
+          port: mapping.targetPort,
+          targetHost: mapping.targetHost,
+        }));
+      return this.firewall.sync(desired);
+    });
   }
 
   async updateSettings(input: Partial<AppConfig['settings']>): Promise<AppConfig['settings']> {

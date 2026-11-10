@@ -44,6 +44,13 @@ const EMPTY_FORM: FormState = {
   syncFirewall: true,
 };
 
+const B_LOCAL_TARGETS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/** Mirrors server/src/util/net.ts isBLocalTarget - keep the two in sync. */
+function isBLocalTarget(targetHost: string): boolean {
+  return B_LOCAL_TARGETS.has(targetHost.trim().toLowerCase());
+}
+
 export function MappingsPage() {
   const { snap, refresh, toast, history } = useApp();
   const [query, setQuery] = useState('');
@@ -55,6 +62,7 @@ export function MappingsPage() {
   const [deleting, setDeleting] = useState<Mapping | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const firewallEligible = isBLocalTarget(form.targetHost);
   const mappings = snap?.mappings ?? [];
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -356,7 +364,7 @@ export function MappingsPage() {
             </Field>
           </div>
 
-          <Field label="B 侧目标地址" hint="默认 127.0.0.1；也可填 B 内网可达的 IP 或域名">
+          <Field label="B 侧目标地址" hint="仅 localhost / 127.0.0.1 / ::1 视为 B 本机会同步防火墙；填其它 IP 或域名时不会在 B 上创建规则">
             <input
               className="input input--mono"
               value={form.targetHost}
@@ -376,10 +384,15 @@ export function MappingsPage() {
           <div className="form__switch">
             <div>
               <strong>在 B 上同步防火墙规则</strong>
-              <p>自动为 {form.targetPort || '目标端口'} 创建入站 + 出站 TCP 规则；删除映射时一并清理，避免规则堆积。</p>
+              {firewallEligible ? (
+                <p>自动为 {form.targetPort || '目标端口'} 创建入站 + 出站 TCP 规则；删除映射时一并清理，避免规则堆积。</p>
+              ) : (
+                <p>目标地址不是 B 本机，B 上不需要开放端口，已强制关闭同步。若这确实是 B 本机，请改填 127.0.0.1。</p>
+              )}
             </div>
             <Toggle
-              checked={form.syncFirewall}
+              checked={form.syncFirewall && firewallEligible}
+              disabled={!firewallEligible}
               onChange={(next) => setForm({ ...form, syncFirewall: next })}
               label="同步防火墙"
             />

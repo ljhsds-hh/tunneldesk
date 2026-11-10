@@ -3,6 +3,7 @@ import { Logger } from '../util/logger.js';
 import { SshLink } from '../ssh/link.js';
 import { cleanPowerShellError, isPrivilegeError, powershell } from '../ssh/client.js';
 import type { FirewallRuleInfo } from '../types.js';
+import { isBLocalTarget } from '../util/net.js';
 
 export const RULE_GROUP = 'TunnelDesk';
 export const RULE_PREFIX = 'TunnelDesk-';
@@ -19,6 +20,18 @@ export function mappingIdFromRuleName(name: string): string | null {
 export interface FirewallDesiredPort {
   mappingId: string;
   port: number;
+  targetHost: string;
+}
+
+/**
+ * A mapping needs a B-side firewall rule only when it is enabled, opted in and
+ * targets B itself. Third-party targets are reached through B's outbound SSH
+ * channel, so opening a local port on B would be pointless.
+ */
+export function firewallEligible(
+  mapping: Pick<MappingConfig, 'enabled' | 'syncFirewall' | 'targetHost'>,
+): boolean {
+  return mapping.enabled && mapping.syncFirewall && isBLocalTarget(mapping.targetHost);
 }
 
 /**
@@ -40,7 +53,7 @@ export class FirewallManager {
   ) {}
 
   async applyMapping(mapping: MappingConfig): Promise<boolean> {
-    if (!mapping.syncFirewall) return true;
+    if (!firewallEligible(mapping)) return true;
     const name = ruleNameFor(mapping.id);
     const script = [
       `$ErrorActionPreference = 'Stop'`,
@@ -116,6 +129,8 @@ export class FirewallManager {
       const mapping = {
         id: item.mappingId,
         targetPort: item.port,
+        targetHost: item.targetHost,
+        enabled: true,
         syncFirewall: true,
         name: item.mappingId,
       } as MappingConfig;

@@ -503,6 +503,15 @@ export function ConnectionPage() {
             <div className="rules">
               {(snap?.mappings ?? []).map((mapping) => {
                 const rule = rulesByMapping.get(mapping.id);
+                // Mirrors server/src/util/net.ts isBLocalTarget.
+                const eligibleForFirewall = ['localhost', '127.0.0.1', '::1'].includes(
+                  mapping.targetHost.trim().toLowerCase(),
+                );
+                const syncLabel = !eligibleForFirewall
+                  ? '目标非 B 本机 · 不同步'
+                  : mapping.syncFirewall
+                    ? '自动同步'
+                    : '已关闭同步';
                 return (
                   <div key={mapping.id} className="rule-row">
                     <span className={`dot ${rule?.inbound && rule?.outbound ? 'dot--ok' : 'dot--idle'}`} />
@@ -513,8 +522,8 @@ export function ConnectionPage() {
                     <div className="rule-row__tags">
                       <Badge tone={rule?.inbound ? 'ok' : 'neutral'}>入站 {rule?.inbound ? '已放行' : '未创建'}</Badge>
                       <Badge tone={rule?.outbound ? 'ok' : 'neutral'}>出站 {rule?.outbound ? '已放行' : '未创建'}</Badge>
-                      <Badge tone={mapping.syncFirewall ? 'accent' : 'neutral'}>
-                        {mapping.syncFirewall ? '自动同步' : '已关闭同步'}
+                      <Badge tone={mapping.syncFirewall && eligibleForFirewall ? 'accent' : 'neutral'}>
+                        {syncLabel}
                       </Badge>
                     </div>
                   </div>

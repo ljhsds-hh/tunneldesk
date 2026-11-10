@@ -11,3 +11,4 @@ Thumbs.db
 coverage/
 .vite/
 tools/*.local.*
+.workbuddy/

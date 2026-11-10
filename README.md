@@ -41,11 +41,26 @@ A 上 SSH 直连只需 Node.js；使用 Azure Bastion 方式时另需安装 Azur
 :: 首次安装依赖
 npm install
 
-:: 日常启动（清理旧构建 → 重新构建 → 启动并打开浏览器）
+:: 日常启动（弹出模式选择，直接回车默认 1）
 start.cmd
+
+:: 也可以带参数启动，跳过选择
+start.cmd clean
+start.cmd run
 ```
 
-启动窗口会显示清理、构建与运行日志；控制台运行期间窗口保持打开，关闭窗口即停止服务。如果 19000 已被占用，脚本会显示占用进程并询问；输入 `Y` 才会结束并继续，其他输入会取消并保留窗口。控制台固定监听 `http://127.0.0.1:19000`，不会对局域网开放。也可以手动启动：
+启动窗口会让你选择模式（直接回车默认 `1`）：
+
+| 模式 | 行为 | 适用 |
+| --- | --- | --- |
+| `[1] clean` | 清理 `server/dist` 与 `web/dist` → 全量编译 → 启动 | 代码有改动时 |
+| `[2] run` | 跳过编译，直接用现有构建启动 | 代码未改动时 |
+
+模式 `2` 会检查 `server/dist/index.js` 与 `web/dist/index.html` 是否存在，并打印构建产物的修改时间；缺失时明确报错并提示改用模式 `1`。**注意**：改过源码却用了旧构建时，模式 `2` 能正常启动但页面是旧的，所以只要动过代码就用模式 `1`。
+
+> 启动脚本内的提示文字使用英文：`cmd.exe` 在 UTF-8 代码页下解析中文全角标点时，会把一行后半段误当成命令执行，纯 ASCII 最稳妥。中文说明以本文为准。
+
+启动窗口会显示对应模式的日志；控制台运行期间窗口保持打开，关闭窗口即停止服务。如果 19000 已被占用，脚本会显示占用进程并询问；输入 `Y` 才会结束并继续，其他输入会取消并保留窗口。控制台固定监听 `http://127.0.0.1:19000`，不会对局域网开放。也可以手动启动：
 
 ```bat
 npm start -- --port 19000 --open
@@ -95,7 +110,8 @@ Get-Service sshd
 
 - 规则名固定为 `TunnelDesk-<映射ID>`，分组 `TunnelDesk`，出入站各一条。
 - 删除映射、关闭同步、修改目标端口时，先删旧规则再按需重建。
-- 启动、重连、手动「立即对账」时会列出所有 `TunnelDesk-*` 规则，删除不属于任何启用映射的孤儿规则，因此不会越积越多。
+- **只有目标地址为 `localhost` / `127.0.0.1` / `::1` 时才在 B 上创建规则**；填其它 IP 或域名表示「B 可达的第三方」，B 上不开放端口，也不会修改那台主机的防火墙（见 `docs/manual/protocol-support-guide.md`）。
+- 启动、重连、手动「立即对账」时会列出所有 `TunnelDesk-*` 规则，删除不属于任何启用映射的孤儿规则，因此不会越积越多；另有 1 小时低频兜底对账，用于清理崩溃 / 断电后遗留的规则。
 - 程序只操作带该前缀/分组的规则，不会误删系统或其他软件的规则。
 
 ---
@@ -198,10 +214,11 @@ tunneldesk/
 │  ├─ src/ui.tsx           自研组件（按钮、抽屉、图表、开关等）
 │  ├─ src/styles.css       设计系统与响应式样式
 │  └─ src/icons.tsx        自绘 SVG 图标
-├─ tools/                  mock SSH 服务端、演示服务、E2E 脚本
+├─ tools/                  mock SSH 服务端、演示服务、E2E / 阶段二验证脚本
 ├─ docs/specs/             设计规格
 ├─ docs/plans/             实施计划
-└─ start.cmd               一键启动
+├─ docs/manual/            使用说明与验收清单
+└─ start.cmd               双模式启动脚本（clean / run）
 ```
 
 ---
@@ -232,6 +249,27 @@ node tools\e2e-smoke.mjs
 
 模拟服务只用于开发验证，不会进入生产路径。真实环境请按第 3、4 节在 B 上验证一次 RDP/HTTP 与内网域名。
 
+### 阶段二本地验证（2026-11-10，非真实环境）
+
+`node tools/phase2-verify.mjs` 会在隔离端口自动启动 mock B、演示服务与控制台，跑完自动清理。验证记录分三级：
+
+| 标记 | 含义 | 本阶段覆盖 |
+| --- | --- | --- |
+| `[local-real]` | 本机真实客户端 + 真实协议栈 | HTTP、HTTPS/TLS（自签证书）、真实 git 生成的二进制流、TCP 大包与字节完整性 |
+| `[mock]` | 链路级 / 夹具验证 | SVN、SQL Server、MySQL 的字节透传与长连接；F1 判定与对账；新增单测 |
+| `[real-env]` | 真实内网 B + 真实服务端 | **本阶段未执行**，请按 `docs/manual/phase2-acceptance-checklist.md`（V-1~V-11）验收 |
+
+```bat
+npm test                        :: 10 个文件 / 77 项，全部通过
+npm run typecheck               :: 前后端通过
+npm run build                   :: 前端 Vite + 后端 tsc 通过
+node tools/phase2-verify.mjs    :: 本地端到端 + 原有 12 项 E2E 回归
+```
+
+结果：阶段二本地检查 25 项全部通过，其中原有 E2E 冒烟 12 项亦全部通过。**1 项跳过**：Git 的完整 clone/push 需要 git-daemon 或 Smart HTTP，本机 PortableGit 不提供，留到真实环境 V-3 验收。
+
+> **阶段二的真实环境未验证**。下表只记录此前 v0.2 已实测项目；阶段二未实测项不写入该表。协议用法见 `docs/manual/protocol-support-guide.md`，真实环境验收清单见 `docs/manual/phase2-acceptance-checklist.md`。
+
 ### 真实环境验证（2026-11-10）
 
 在真实 Windows 环境下完成了一次端到端验收，以下项目均已实测通过：
@@ -260,6 +298,10 @@ node tools\e2e-smoke.mjs
 - 主机指纹仅首次记录并展示，不做变更告警。
 - 自动化回归仍以 mock SSH 服务端为主；真实环境已完成的验证范围见第 9 节「真实环境验证」。
 - 若 B 的 OpenSSH 禁用了密码登录，当前版本需手动导入密钥后编辑配置（界面暂无「使用已有密钥」入口）。
+- **内网代理的 HTTP/1.1 语义不合规**（强制 `Connection: close`、一连接只解析一次请求头），依赖连接复用或 WebDAV 扩展方法的客户端经代理可能失败，典型现象是 SVN `commit` 失败而 `checkout` / `update` 正常。阶段二按需求约定**不修复**，此类场景请使用端口映射。
+- 端口映射基于 `socket.pipe()`，客户端发完数据立即 TCP 半关闭并期待回包的边缘用法会丢失回包；真实协议均在收到响应后才关闭，不受影响。
+- SQL Server 命名实例 `HOST\INSTANCE` 依赖 UDP 1434 SQL Browser，不支持；请使用显式 TCP 端口与 `host,port` 连接串。
+- 阶段二的能力矩阵、使用侧适配与验收清单见 `docs/manual/protocol-support-guide.md`、`docs/manual/phase2-acceptance-checklist.md`。
 
 ---
 

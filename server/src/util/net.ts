@@ -49,11 +49,22 @@ export function isValidPort(value: unknown): value is number {
 
 export function isValidHostname(value: string): boolean {
   if (!value || value.length > 253) return false;
-  if (value === 'localhost') return true;
+  if (value === 'localhost' || value === '::1') return true;
   const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
   if (ipv4.test(value)) {
     return value.split('.').every((part) => Number(part) >= 0 && Number(part) <= 255);
   }
   const hostname = /^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
   return hostname.test(value);
+}
+
+const B_LOCAL_TARGETS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/**
+ * True only when a mapping target literally points at the SSH host B itself.
+ * Any other value - including B's own LAN IP - is a third-party address that B
+ * can reach, for which opening a port on B's firewall is pointless.
+ */
+export function isBLocalTarget(targetHost: string): boolean {
+  return B_LOCAL_TARGETS.has(String(targetHost ?? '').trim().toLowerCase());
 }
