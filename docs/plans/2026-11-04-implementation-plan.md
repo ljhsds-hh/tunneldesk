@@ -1,8 +1,8 @@
 # TunnelDesk 实施计划
 
-- 日期：2026-11-04
+- 日期：2026-11-04（2026-11-10 补充真实环境验证）
 - 关联规格：`docs/specs/2026-11-04-tunneldesk-design.md`
-- 状态：v0.1 已交付（本地 mock 全链路验证通过；真实 Azure 环境待现场验证）
+- 状态：v0.1 已交付；本地 mock 全链路验证通过，真实 Azure Bastion / 局域网环境验证通过
 
 ## 1. 交付目标
 
@@ -84,7 +84,9 @@
 | 集成 | 删除映射 → 规则清理 | mock PowerShell | 通过 |
 | UI | 五个页面、深/浅主题、抽屉、确认框 | 浏览器人工走查 | 通过 |
 | UI | 空状态、加载态、错误提示 | 浏览器人工走查 | 通过 |
-| 现场 | 真实 Azure VM：RDP 映射、内网站点、UAC 权限 | 待用户在 A/B 上执行 | 未验证 |
+| 现场 | 真实 Azure VM：Bastion 本地转发端口接入、端口映射、HTTP/HTTPS 内网代理 | 用户在真实 A/B 上执行 | 通过（2026-11-10） |
+| 现场 | 真实 Windows 主机：密钥登录、防火墙规则创建与清理 | 用户在真实 A/B 上执行 | 通过（2026-11-05） |
+| 现场 | PAC 白名单分流（Windows 系统代理） | 用户在真实 A 上执行 | 通过（2026-11-10） |
 
 ## 4. 风险与应对
 
@@ -110,11 +112,23 @@
 ## 6. 验证记录
 
 ```text
-npm --workspace server run test       15 passed
+npm --workspace server run test       29 passed
 npm run typecheck                     通过（server + web）
 npm run build                         通过（web 202 KB / gzip 63 KB；server tsc）
 node tools/e2e-smoke.mjs              12/12 PASS
 ```
+
+### 真实环境验证（2026-11-10）
+
+| 项目 | 环境 | 结果 |
+| --- | --- | --- |
+| Bastion 隧道接入 | `az network bastion tunnel --resource-port 22 --port 50022`，程序连接 `127.0.0.1:50022` | 通过，未改动 VM / NSG / Bastion |
+| 端口映射 | 真实 A → B，A 本地端口访问 B 侧目标服务 | 通过 |
+| 内网代理 | A 系统代理设为 `127.0.0.1:8888`，访问内网 HTTP 与 HTTPS 站点 | 通过 |
+| PAC 白名单分流 | 固定 IPv4 白名单，命中走 B、未命中直连 | 通过 |
+| 防火墙规则生命周期 | 局域网真实主机（2026-11-05）：创建映射生成入/出站规则，删除后清理 | 通过 |
+
+以上确认了设计规格 D1 的关键假设：无需新增 B 侧监听端口，复用 SSH 与 Bastion 隧道即可完成两个业务。
 
 E2E 输出摘要：
 
