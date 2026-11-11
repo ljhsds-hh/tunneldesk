@@ -155,13 +155,15 @@ A 能直连 B:22 时，直接选择「SSH 直连」，填写 B 的地址与 `22`
 
 | 页面 | 内容 |
 | --- | --- |
-| 概览 | 链路健康、在线时长、实时吞吐曲线、两个业务的独立指标、最近事件 |
+| 概览 | 链路健康、在线时长、实时吞吐曲线、两个业务的独立指标、最近事件（可打开完整运行日志） |
 | 端口映射 | 映射卡片、新建/编辑抽屉、端口占用校验、自动挑选空闲端口、启停开关、单映射流量、分组折叠与拖拽排序 |
 | 内网代理 | 总开关、代理地址复制、PAC 白名单分流、B 侧连通性探测、使用示例、实时请求日志（可按失败过滤） |
 | 连接管理 | 主机信息、密钥与指纹、连接/断开/测试、防火墙规则对账与权限修复提示；Azure Bastion 配置、50022 隧道状态/诊断、远程桌面 |
 | 设置 | 深/浅主题、自动重连、日志保留条数、数据目录与备份说明 |
 
-实时指标通过 SSE 每秒推送一次，不做轮询；页面切换与抽屉使用 150–250ms 的过渡，支持 `prefers-reduced-motion`。
+实时指标通过 SSE 每秒推送一次，不做轮询；页面切换与抽屉使用 150–250ms 的过渡，支持 `prefers-reduced-motion`。若实时流中断，侧栏会出现「实时连接中断，正在重连…」提示，避免把过期数字当成实时状态。
+
+配置变更（新建 / 编辑 / 启停映射、分组操作、代理与设置变更）会写审计日志；B 侧防火墙对账在这些操作之后异步执行，不再阻塞接口返回，因此规则可能比页面上的映射晚一两秒出现，属正常表现。
 
 ### 5.1 端口映射分组
 
@@ -197,6 +199,7 @@ A 能直连 B:22 时，直接选择「SSH 直连」，填写 B 的地址与 `22`
 | --- | --- |
 | 配置 | `%APPDATA%\TunnelDesk\config.json`（含 Azure Bastion 配置与 DPAPI 密码密文） |
 | 私钥 | `%APPDATA%\TunnelDesk\keys\` |
+| 运行日志 | `%APPDATA%\TunnelDesk\logs\tunneldesk-YYYY-MM-DD.log`（按天滚动，保留 7 天） |
 | 临时远程桌面文件 | `%APPDATA%\TunnelDesk\rdp\`（会话结束/程序退出时删除） |
 | 覆盖数据目录 | 环境变量 `TUNNELDESK_DATA_DIR`（测试/便携模式） |
 
@@ -273,15 +276,34 @@ node tools\e2e-smoke.mjs
 | `[real-env]` | 真实内网 B + 真实服务端 | **本阶段未执行**，请按 `docs/manual/phase2-acceptance-checklist.md`（V-1~V-11）验收 |
 
 ```bat
-npm test                        :: 10 个文件 / 85 项，全部通过
+npm test                        :: 11 个文件 / 111 项，全部通过
 npm run typecheck               :: 前后端通过
 npm run build                   :: 前端 Vite + 后端 tsc 通过
 node tools/phase2-verify.mjs    :: 本地端到端 + 原有 12 项 E2E 回归
 ```
 
-结果：阶段二本地检查 27 项全部通过，其中原有 E2E 冒烟 12 项亦全部通过。**2 项跳过**：HTTPS/TLS 需要本机 `openssl`，Git 的完整 clone/push 需要 git-daemon 或 Smart HTTP，本机 PortableGit 不提供，均留到真实环境验收。
+结果：本地检查 27 项全部通过，其中原有 E2E 冒烟 12 项亦全部通过。**1 项跳过**：Git 的完整 clone/push 需要 git-daemon 或 Smart HTTP，本机 PortableGit 不提供，留到真实环境验收（HTTPS/TLS 已用本机 `openssl` 自签证书实测通过）。
 
 > **阶段二的真实环境未验证**。下表只记录此前 v0.2 已实测项目；阶段二未实测项不写入该表。协议用法见 `docs/manual/protocol-support-guide.md`，真实环境验收清单见 `docs/manual/phase2-acceptance-checklist.md`。
+
+### 优化验证（2026-11-11，非真实环境）
+
+本轮针对交互延迟、防火墙执行效率、日志可见性与文案一致性做了优化，验证方式与结果：
+
+| 项目 | 手段 | 结果 |
+| --- | --- | --- |
+| 单元测试 | `npm test` | 11 个文件 / 111 项全部通过（新增 `runtime-ops.test.ts` 21 项） |
+| 类型与构建 | `npm run typecheck`、`npm run build` | 通过 |
+| 本地端到端 | `node tools/phase2-verify.mjs` | 27 项通过 + 1 项跳过（Git daemon），含原有 12 项 E2E 回归 |
+| 接口自检 | 临时数据目录启动控制台，检查 `/api/state`、`/api/logs`、`/api/events`、`/proxy.pac` | 快照含 `version`，日志接口返回全量缓冲，SSE 帧正常，PAC 正常 |
+| 日志落盘 | 同上，检查 `logs/tunneldesk-YYYY-MM-DD.log` | 按天生成，本地时间戳，密码类字段已脱敏 |
+| `-Group` 等价性 | 本机 PowerShell 对比 `Get-NetFirewallRule -Group <组名>` 与属性过滤 | 两种写法返回数量一致（52 = 52），下推过滤语义成立 |
+
+**未在本轮验证的部分**：批量下发脚本、删除非活动主机时的临时连接清理，都依赖真实 Windows B。mock SSH 只能验证脚本文本与解析逻辑，真实执行请按下列步骤自查：
+
+1. 连接 B 后打开「连接管理」→「立即对账」：日志应出现一条 `已放行 B 端口 …` 或「规则已同步」，且不再逐条刷屏。
+2. 删除一条映射：应在 1 秒内返回，随后日志出现「已删除映射 …」。
+3. 配置两台主机，连接 A、删除 B（B 名下有一条映射）：删除应成功，日志出现「删除主机 B 前已清理 1 条规则」；若 B 不可达则出现告警，规则需手动清理。
 
 ### 真实环境验证（2026-11-10）
 

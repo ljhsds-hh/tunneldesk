@@ -315,4 +315,4 @@ desired = { owned 中 syncFirewall = true 的映射 }                    // 自�
 
 另：为消除多 worker 并发写临时缓存的环境冲突，`server/package.json` 的 `test` 脚本固定为单 worker（`--pool=forks --maxWorkers=1 --minWorkers=1`），不改变任何业务配置（C8 保持）。
 
-交付验证：`npm test`（10 文件 / 85 项）、`npm run typecheck`、`npm run build` 全部通过；`tools/phase2-verify.mjs` 27 项本地检查全通过、原有 12 项 E2E 回归全通过；真实环境验收见 `docs/manual/phase2-acceptance-checklist.md`。
+交付验证：`npm test`（当前 11 文件 / 111 项，阶段二交付时为 10 文件 / 85 项）、`npm run typecheck`、`npm run build` 全部通过；`tools/phase2-verify.mjs` 27 项本地检查全通过、原有 12 项 E2E 回归全通过；真实环境验收见 `docs/manual/phase2-acceptance-checklist.md`。2026-11-11 的优化轮次补充了 21 项单测，详见 `../plans/2026-11-11-optimization-plan.md`。
