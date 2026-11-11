@@ -13,11 +13,11 @@
 | 编号 | 文件 | 改动 | 对应需求 |
 | --- | --- | --- | --- |
 | CH-1 | `server/src/util/net.ts` | 新增 `isBLocalTarget()`：`trim()` + `toLowerCase()` 后仅 `localhost` / `127.0.0.1` / `::1` 返回 true；`isValidHostname()` 增加 `::1` 白名单 | 4.2、4.3 |
-| CH-2 | `server/src/firewall/manager.ts` | 导出 `firewallEligible()`；`FirewallDesiredPort` 增加 `targetHost`；`applyMapping()` 硬校验拒绝非 B 目标；`sync()` 补建时构造完整映射对象 | 4.4、4.6、C2/C3 |
+| CH-2 | `server/src/firewall/manager.ts` | 导出 `firewallEligible()`；`FirewallDesiredPort` 增加 `targetHost`；`applyMapping()` 硬校验拒绝非 B 目标；`list()` 返回端口/协议，`sync()` 按名称 + 端口 + 方向 + 协议 + 启用状态对账 | 4.4、4.6、C2/C3 |
 | CH-3 | `server/src/app.ts` | desired 计算改用 `firewallEligible()`；`syncFirewall()` 串行化（防定时任务与配置变更并发下发 PowerShell）；新增 1 小时定时兜底并在 `shutdown()` 清理 | 4.4、4.5 |
 | CH-4 | `web/src/pages/Mappings.tsx` | 目标地址提示改写；非 B 目标时「同步防火墙」开关置灰并说明原因，不提供绕过入口 | 4.6 |
-| CH-5 | `web/src/pages/Connection.tsx` | 映射徽标对非 B 目标显示「不同步」而非「自动同步」，避免误导 | 4.6（一致性） |
-| CH-6 | `server/test/firewall-target.test.ts` | 新增：判定表全类目、`::1` 校验、desired 资格、硬校验、命名空间 | 第 7 章 |
+| CH-5 | `web/src/pages/Connection.tsx`、`web/src/pages/Mappings.tsx` | 非 B 目标显示「不同步」；映射卡片不再误报「防火墙同步」；规则被禁用时显示「已禁用」而非「已放行」 | 4.6（一致性） |
+| CH-6 | `server/test/firewall-target.test.ts` | 新增：判定表全类目、`::1` 校验、desired 资格（含停用映射）、端口/方向/协议/禁用状态重建、硬校验、命名空间 | 第 7 章 |
 | CH-7 | `server/test/forward-transparency.test.ts` | 新增：字节完整性、大包、并发连接、半关闭、长连接空闲（用 fake `SshLink` + 本地 echo server，无需真实 SSH） | FR-1~FR-5、第 7 章 |
 | CH-8 | `tools/phase2-verify.mjs` | 新增：本地协议验证脚本（HTTP/HTTPS 回归、Git 真实客户端端到端、TCP 透传） | FR-1~FR-3、FR-6 |
 | CH-9 | `docs/manual/protocol-support-guide.md` | 新增：五项协议的 A 侧 URL / 连接串写法、已知适配项与可复制命令 | 第 6 章、第 9 章 |
@@ -32,7 +32,7 @@
 ## 2. 关键实现决策
 
 1. **判定函数单一来源**：`isBLocalTarget()` 放 `util/net.ts`，`firewallEligible()` 放 `firewall/manager.ts`。后端 desired 计算与 `applyMapping` 硬校验都调用同一函数，避免两处逻辑漂移。前端因无法 import server 模块，在 `Mappings.tsx` 内置一份等价的字面量集合（单测锁定后端行为）。
-2. **desired 资格统一**：`firewallEligible = enabled && syncFirewall && isBLocalTarget(targetHost)`。`sync()` 补建路径构造的 `MappingConfig` 必须带 `targetHost` 与 `enabled: true`，否则硬校验会把补建全部拦掉——这是实施时最容易踩的坑。
+2. **desired 资格统一**：`firewallEligible = syncFirewall && isBLocalTarget(targetHost)`。`enabled` 不参与：停用映射只停止 A 侧监听，B 侧规则保留并在缺失时补建；只有映射记录删除 / 关闭同步 / 目标改为非 B 才清理。`sync()` 补建路径构造的 `MappingConfig` 必须带 `targetHost` 和 `enabled: true`，否则 `applyMapping` 的硬校验会拦截。
 3. **串行化**：`App` 增加 `firewallChain`，`syncFirewall()` 把实际对账排进链尾；链自身吞掉 rejection 保证后续调用不被打断，返回给调用者的 Promise 保留错误以供上层 `.catch()`。
 4. **定时兜底**：`init()` 里在现有 `ticker` 之后注册 1 小时 `setInterval`（`unref()`），回调先判 `link.isOnline()`，离线跳过；`shutdown()` 里 `clearInterval`。不新增第二个定时器管理范式。
 5. **转发核心零改动**：五项协议能力由现有 `socket.pipe(channel)` 天然提供，本阶段通过 CH-7 / CH-8 证明链路无损，并靠 CH-9 把使用侧适配写清。
@@ -45,9 +45,9 @@
 | --- | --- | --- | --- |
 | T-1 | Vitest | `isBLocalTarget` 判定表：`localhost` / `127.0.0.1` / `::1` / `LOCALHOST` / 前后空格 / `127.0.0.2` / B 内网 IP / 域名 / 机器名 / 其它 IPv6 / 空串 | 仅前三组（含规范化后）为 true |
 | T-2 | Vitest | `isValidHostname('::1')` | true；其它 IPv6 仍 false |
-| T-3 | Vitest | `firewallEligible` 组合：`enabled` / `syncFirewall` / `targetHost` 三因子 | 三者全真才 true |
+| T-3 | Vitest | `firewallEligible` 组合：`syncFirewall` / `targetHost` 两因子，`enabled` 不影响 | `syncFirewall` 且目标为 B 本机才 true；停用映射仍为 true |
 | T-4 | Vitest | `applyMapping` 对非 B 目标 | 直接返回 true，不下发任何 PowerShell（fake exec 计数为 0） |
-| T-5 | Vitest | `sync()` 的 missing / orphans 分类 | 非 B 目标的现存规则被判 orphan；他人前缀规则不受影响 |
+| T-5 | Vitest | `sync()` 的 missing / stale / orphans 分类 | 非 B 目标的现存规则被判 orphan；同名但端口/方向/协议/启用状态不一致判 stale 并重建；他人前缀规则不受影响 |
 | T-6 | Vitest | 串行化 | 并发 3 次 `syncFirewall()` 不产生并发 exec |
 | T-7 | Vitest | 转发透明性 | 字节完整性、1 MB 大包、10 并发连接、半关闭、空闲 2s 后仍可收发 |
 | T-8 | 本地脚本 | HTTP / HTTPS 经映射回归 | 状态码与正文一致；TLS 握手成功 |
@@ -94,7 +94,8 @@
 ## 7. 实施结果（2026-11-10）
 
 - CH-1 ~ CH-12 全部完成；另加 CH-13（`server/package.json` 测试脚本固定单 worker，消除沙箱并发缓存冲突）。
-- T-1 ~ T-12：`npm test` 10 文件 / 77 用例全通过；`npm run typecheck`、`npm run build` 通过；`tools/phase2-verify.mjs` 25 项 PASS + 原有 12 项 E2E 回归全通过，退出码 0。1 项 SKIP 为本机无 git-daemon / Smart HTTP（Git 完整 clone/push 转 V-3 真实验收）。
+- T-1 ~ T-12：`npm test` 10 文件 / 82 用例全通过；`npm run typecheck`、`npm run build` 通过；`tools/phase2-verify.mjs` 26 项 PASS + 原有 12 项 E2E 回归全通过，退出码 0。1 项 SKIP 为本机无 git-daemon / Smart HTTP（Git 完整 clone/push 转 V-3 真实验收）。
 - 转发核心最终**零改动**：半关闭验证发现的限制属 Node pipe 固有行为，临时改动已回退，详见规格第 11 章。
 - 真实环境验收清单：`docs/manual/phase2-acceptance-checklist.md`；协议用法：`docs/manual/protocol-support-guide.md`。
-- 收尾代码审核：所有 B 侧防火墙命令统一走 `enqueueFirewall()` 串行链（修复 `removeMapping()` 绕过链的并发缺口）；删除验证脚本的假阳性检查与死常量；测试数 76 → 77，本地验证 25 项 PASS（含 4 类运行时边界）。
+- 收尾代码审核：所有 B 侧防火墙命令统一走 `enqueueFirewall()` 串行链（修复 `removeMapping()` 绕过链的并发缺口）；删除验证脚本的假阳性检查与死常量；测试数 76 → 82，本地验证 26 项 PASS（含运行时边界与对账重建）。
+- 2026-11-11 复审修订：停用映射保留并补建规则；`sync()` 按名称 + 端口 + 方向 + 协议 + 启用状态对账；修复映射卡片与规则禁用状态的 UI 误报。

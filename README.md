@@ -109,9 +109,10 @@ Get-Service sshd
 ### 3.2 规则命名与清理
 
 - 规则名固定为 `TunnelDesk-<映射ID>`，分组 `TunnelDesk`，出入站各一条。
-- 删除映射、关闭同步、修改目标端口时，先删旧规则再按需重建。
+- **停用映射不会删除 B 侧规则**：映射记录仍存在时规则保留；如果规则缺失会补建。只有删除映射、关闭同步、目标改为非 B 时，才清理对应规则。
+- 修改目标端口后，对账会比较规则的本地端口 / 方向 / 协议 / 启用状态；不一致时先删同名规则再重建。即使改端口时 SSH 离线，重连后的对账也会修正。
 - **只有目标地址为 `localhost` / `127.0.0.1` / `::1` 时才在 B 上创建规则**；填其它 IP 或域名表示「B 可达的第三方」，B 上不开放端口，也不会修改那台主机的防火墙（见 `docs/manual/protocol-support-guide.md`）。
-- 启动、重连、手动「立即对账」时会列出所有 `TunnelDesk-*` 规则，删除不属于任何启用映射的孤儿规则，因此不会越积越多；另有 1 小时低频兜底对账，用于清理崩溃 / 断电后遗留的规则。
+- 启动、重连、手动「立即对账」时会列出所有 `TunnelDesk-*` 规则，删除不属于任何映射记录的孤儿规则，因此不会越积越多；另有 1 小时低频兜底对账，用于清理崩溃 / 断电后遗留的规则。
 - 程序只操作带该前缀/分组的规则，不会误删系统或其他软件的规则。
 
 ---
@@ -260,13 +261,13 @@ node tools\e2e-smoke.mjs
 | `[real-env]` | 真实内网 B + 真实服务端 | **本阶段未执行**，请按 `docs/manual/phase2-acceptance-checklist.md`（V-1~V-11）验收 |
 
 ```bat
-npm test                        :: 10 个文件 / 77 项，全部通过
+npm test                        :: 10 个文件 / 82 项，全部通过
 npm run typecheck               :: 前后端通过
 npm run build                   :: 前端 Vite + 后端 tsc 通过
 node tools/phase2-verify.mjs    :: 本地端到端 + 原有 12 项 E2E 回归
 ```
 
-结果：阶段二本地检查 25 项全部通过，其中原有 E2E 冒烟 12 项亦全部通过。**1 项跳过**：Git 的完整 clone/push 需要 git-daemon 或 Smart HTTP，本机 PortableGit 不提供，留到真实环境 V-3 验收。
+结果：阶段二本地检查 26 项全部通过，其中原有 E2E 冒烟 12 项亦全部通过。**1 项跳过**：Git 的完整 clone/push 需要 git-daemon 或 Smart HTTP，本机 PortableGit 不提供，留到真实环境 V-3 验收。
 
 > **阶段二的真实环境未验证**。下表只记录此前 v0.2 已实测项目；阶段二未实测项不写入该表。协议用法见 `docs/manual/protocol-support-guide.md`，真实环境验收清单见 `docs/manual/phase2-acceptance-checklist.md`。
 

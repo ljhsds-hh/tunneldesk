@@ -8,6 +8,13 @@ import { isBLocalTarget } from '../util/net.js';
 export const RULE_GROUP = 'TunnelDesk';
 export const RULE_PREFIX = 'TunnelDesk-';
 
+/** Get-NetFirewallPortFilter returns "TCP" (or numeric 6 in some Windows builds). */
+function isTcpProtocol(protocol: string | null): boolean {
+  if (!protocol) return false;
+  const value = protocol.trim().toLowerCase();
+  return value === 'tcp' || value === '6';
+}
+
 export function ruleNameFor(mappingId: string): string {
   return `${RULE_PREFIX}${mappingId}`;
 }
@@ -24,14 +31,16 @@ export interface FirewallDesiredPort {
 }
 
 /**
- * A mapping needs a B-side firewall rule only when it is enabled, opted in and
- * targets B itself. Third-party targets are reached through B's outbound SSH
- * channel, so opening a local port on B would be pointless.
+ * A mapping needs a B-side firewall rule whenever it opts in and targets B
+ * itself. `enabled` is deliberately not part of this test: disabling a mapping
+ * only stops the local listener, it does not invalidate the B-side rule. The
+ * rule is removed only when the mapping record disappears, sync is turned off,
+ * or the target becomes a third-party address.
  */
 export function firewallEligible(
-  mapping: Pick<MappingConfig, 'enabled' | 'syncFirewall' | 'targetHost'>,
+  mapping: Pick<MappingConfig, 'syncFirewall' | 'targetHost'>,
 ): boolean {
-  return mapping.enabled && mapping.syncFirewall && isBLocalTarget(mapping.targetHost);
+  return mapping.syncFirewall && isBLocalTarget(mapping.targetHost);
 }
 
 /**
@@ -98,26 +107,32 @@ export class FirewallManager {
   }
 
   /**
-   * Reconciles the B-side rules with the desired set: creates what is missing,
-   * deletes orphans (including rules left over from removed or disabled mappings).
+   * Reconciles the B-side rules with the desired set: creates what is missing
+   * or out of date (port / direction / protocol / enabled), deletes orphans
+   * (rules whose mapping record no longer exists, sync was turned off, or the
+   * target moved to a third-party address).
    */
   async sync(desired: FirewallDesiredPort[]): Promise<{ added: number; removed: number }> {
     if (!this.link.isOnline()) throw new Error('隧道未连接，无法同步防火墙规则');
     this.lastError = null;
     const existing = await this.list();
-    const desiredNames = new Map(desired.map((item) => [ruleNameFor(item.mappingId), item.port]));
-    const existingNames = new Set(existing.map((rule) => rule.name));
+    const desiredByName = new Map(desired.map((item) => [ruleNameFor(item.mappingId), item]));
+    const existingByName = new Map<string, FirewallRuleInfo[]>();
+    for (const rule of existing) {
+      const list = existingByName.get(rule.name) ?? [];
+      list.push(rule);
+      existingByName.set(rule.name, list);
+    }
 
-    const orphans = existing.filter((rule) => !desiredNames.has(rule.name));
-    const missing = desired.filter((item) => !existingNames.has(ruleNameFor(item.mappingId)));
-
+    const orphanNames = [...existingByName.keys()].filter((name) => !desiredByName.has(name));
     let removed = 0;
-    if (orphans.length > 0) {
-      const names = [...new Set(orphans.map((rule) => rule.name))];
-      const script = names.map((name) => `Remove-NetFirewallRule -DisplayName '${name}' -ErrorAction SilentlyContinue`).join('; ');
+    if (orphanNames.length > 0) {
+      const script = orphanNames
+        .map((name) => `Remove-NetFirewallRule -DisplayName '${name}' -ErrorAction SilentlyContinue`)
+        .join('; ');
       try {
         await this.link.exec(powershell(`${script}; Write-Output 'CLEANED'`), 20000);
-        removed = names.length;
+        removed = orphanNames.length;
         this.logger.info('firewall', `清理孤儿规则 ${removed} 条`);
       } catch (error) {
         this.lastError = (error as Error).message;
@@ -125,7 +140,9 @@ export class FirewallManager {
     }
 
     let added = 0;
-    for (const item of missing) {
+    for (const [name, item] of desiredByName) {
+      const rules = existingByName.get(name) ?? [];
+      if (this.rulesAreCurrent(rules, item)) continue;
       const mapping = {
         id: item.mappingId,
         targetPort: item.port,
@@ -143,14 +160,34 @@ export class FirewallManager {
     return { added, removed };
   }
 
+  /** A mapping is current only when both directions exist, are enabled and match the desired port/protocol. */
+  private rulesAreCurrent(rules: FirewallRuleInfo[], item: FirewallDesiredPort): boolean {
+    if (rules.length !== 2) return false;
+    const inbound = rules.filter((rule) => rule.direction.toLowerCase().startsWith('in'));
+    const outbound = rules.filter((rule) => rule.direction.toLowerCase().startsWith('out'));
+    if (inbound.length !== 1 || outbound.length !== 1) return false;
+    return [inbound[0], outbound[0]].every(
+      (rule) =>
+        rule !== undefined &&
+        rule.enabled &&
+        rule.port === item.port &&
+        isTcpProtocol(rule.protocol),
+    );
+  }
+
   async list(): Promise<FirewallRuleInfo[]> {
     if (!this.link.isOnline()) return this.rules;
     const script = [
-      // Filtering an empty group result raises "no matching rule" on Windows,
-      // so enumerate all rules and filter locally instead.
       `$rules = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object { $_.Group -eq '${RULE_GROUP}' })`,
-      `foreach ($rule in $rules) { Write-Output ($rule.DisplayName + '|' + $rule.Direction + '|' + $rule.Enabled) }`,
-    ].join('; ');
+      'foreach ($rule in $rules) {',
+      '  $pf = $rule | Get-NetFirewallPortFilter',
+      '  $protocol = $pf.Protocol',
+      "  if ($protocol -is [array]) { $protocol = ($protocol -join ',') }",
+      '  $port = $pf.LocalPort',
+      "  if ($port -is [array]) { $port = ($port -join ',') }",
+      `  Write-Output ($rule.DisplayName + '|' + $rule.Direction + '|' + $rule.Enabled + '|' + $protocol + '|' + $port)`,
+      '}',
+    ].join('\n');
     const result = await this.link.exec(powershell(script), 20000);
     if (result.code !== 0) {
       const message = cleanPowerShellError(result.stderr || result.stdout);
@@ -162,14 +199,17 @@ export class FirewallManager {
     for (const line of result.stdout.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || !trimmed.includes('|')) continue;
-      const [name = '', direction = '', enabled = ''] = trimmed.split('|');
+      const [name = '', direction = '', enabled = '', protocol = '', localPort = ''] = trimmed.split('|');
       const mappingId = mappingIdFromRuleName(name);
       if (!mappingId) continue;
+      const port = /^\d+$/.test(localPort.trim()) ? Number(localPort) : null;
       parsed.push({
         name,
         mappingId,
         direction: direction || 'Unknown',
         enabled: enabled.toLowerCase() !== 'false',
+        port,
+        protocol: protocol || null,
       });
     }
     this.rules = parsed.sort((a, b) => a.name.localeCompare(b.name) || a.direction.localeCompare(b.direction));

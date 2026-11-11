@@ -17,7 +17,7 @@ const portArg = process.argv.indexOf('--port');
 const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 2222;
 const hostKeys = [utils.generateKeyPairSync('rsa', { bits: 2048 }).private];
 
-/** @type {Map<string, Set<string>>} ruleName -> directions */
+/** @type {Map<string, { directions: Set<string>, port: number | null }>} ruleName -> rule */
 const rules = new Map();
 
 function decodeCommand(command) {
@@ -43,14 +43,18 @@ function handleExec(command) {
 
   if (script.includes('Get-NetFirewallRule')) {
     const lines = [];
-    for (const [name, directions] of rules) {
-      for (const direction of directions) lines.push(`${name}|${direction}|True`);
+    for (const [name, entry] of rules) {
+      for (const direction of entry.directions) {
+        lines.push(`${name}|${direction}|True|TCP|${entry.port ?? 'Any'}`);
+      }
     }
     return [`${lines.join('\r\n')}\r\n`, 0];
   }
 
   if (script.includes('Remove-NetFirewallRule') && script.includes('New-NetFirewallRule')) {
-    for (const name of unique) rules.set(name, new Set(['Inbound', 'Outbound']));
+    const portMatch = script.match(/-LocalPort\s+(\d+)/);
+    const port = portMatch ? Number(portMatch[1]) : null;
+    for (const name of unique) rules.set(name, { directions: new Set(['Inbound', 'Outbound']), port });
     return ['RULE_OK\n', 0];
   }
 

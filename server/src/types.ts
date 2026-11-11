@@ -154,6 +154,10 @@ export interface FirewallRuleInfo {
   mappingId: string;
   direction: string;
   enabled: boolean;
+  /** 规则放行的本地端口；Any / 端口段等无法精确比较时为 null。 */
+  port: number | null;
+  /** TCP / UDP / Any；用于识别被改过协议的规则。 */
+  protocol: string | null;
 }
 
 export interface ProxyLogEntry {

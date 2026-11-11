@@ -200,16 +200,31 @@ export function ConnectionPage() {
     setRenameOpen(true);
   };
 
-  const rulesByMapping = new Map<string, { inbound: boolean; outbound: boolean; port: number }>();
+  const rulesByMapping = new Map<
+    string,
+    { inbound: boolean; inboundEnabled: boolean; outbound: boolean; outboundEnabled: boolean; port: number }
+  >();
   if (snap) {
     for (const mapping of snap.mappings) {
-      rulesByMapping.set(mapping.id, { inbound: false, outbound: false, port: mapping.targetPort });
+      rulesByMapping.set(mapping.id, {
+        inbound: false,
+        inboundEnabled: false,
+        outbound: false,
+        outboundEnabled: false,
+        port: mapping.targetPort,
+      });
     }
     for (const rule of snap.firewall.rules) {
       const entry = rulesByMapping.get(rule.mappingId);
       if (!entry) continue;
-      if (rule.direction.toLowerCase().startsWith('in')) entry.inbound = true;
-      if (rule.direction.toLowerCase().startsWith('out')) entry.outbound = true;
+      if (rule.direction.toLowerCase().startsWith('in')) {
+        entry.inbound = true;
+        entry.inboundEnabled = entry.inboundEnabled || rule.enabled;
+      }
+      if (rule.direction.toLowerCase().startsWith('out')) {
+        entry.outbound = true;
+        entry.outboundEnabled = entry.outboundEnabled || rule.enabled;
+      }
     }
   }
 
@@ -514,14 +529,18 @@ export function ConnectionPage() {
                     : '已关闭同步';
                 return (
                   <div key={mapping.id} className="rule-row">
-                    <span className={`dot ${rule?.inbound && rule?.outbound ? 'dot--ok' : 'dot--idle'}`} />
+                    <span className={`dot ${rule?.inboundEnabled && rule?.outboundEnabled ? 'dot--ok' : 'dot--idle'}`} />
                     <div className="rule-row__name">
                       <strong>{mapping.name}</strong>
                       <span className="mono muted">{mapping.targetPort}/TCP</span>
                     </div>
                     <div className="rule-row__tags">
-                      <Badge tone={rule?.inbound ? 'ok' : 'neutral'}>入站 {rule?.inbound ? '已放行' : '未创建'}</Badge>
-                      <Badge tone={rule?.outbound ? 'ok' : 'neutral'}>出站 {rule?.outbound ? '已放行' : '未创建'}</Badge>
+                      <Badge tone={rule?.inboundEnabled ? 'ok' : rule?.inbound ? 'warn' : 'neutral'}>
+                        入站 {rule?.inbound ? (rule.inboundEnabled ? '已放行' : '已禁用') : '未创建'}
+                      </Badge>
+                      <Badge tone={rule?.outboundEnabled ? 'ok' : rule?.outbound ? 'warn' : 'neutral'}>
+                        出站 {rule?.outbound ? (rule.outboundEnabled ? '已放行' : '已禁用') : '未创建'}
+                      </Badge>
                       <Badge tone={mapping.syncFirewall && eligibleForFirewall ? 'accent' : 'neutral'}>
                         {syncLabel}
                       </Badge>

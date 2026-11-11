@@ -123,6 +123,8 @@ export interface FirewallRule {
   mappingId: string;
   direction: string;
   enabled: boolean;
+  port: number | null;
+  protocol: string | null;
 }
 
 export interface ProxyLog {

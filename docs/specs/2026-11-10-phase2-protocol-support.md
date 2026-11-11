@@ -145,19 +145,22 @@
 定义：
 
 ```text
-desired = { 所有 enabled && syncFirewall && targetHost ∈ {localhost, 127.0.0.1, ::1} 的映射 }
+desired = { 所有 syncFirewall && targetHost ∈ {localhost, 127.0.0.1, ::1} 的映射 }
 ```
 
 判定前必须先按 4.2 对 `targetHost` 做 `trim()` + `toLowerCase()` 规范化（例如 `LOCALHOST` 应等价于 `localhost`），不得直接拿原始字符串做字面量比较。
 
+`enabled` **不参与** desired 判定：停用映射只停止 A 侧监听，不删除 B 侧规则；重新启用时也不需要重建规则。
+
 | 情形 | 分类 | 动作 |
 | --- | --- | --- |
 | 映射在 desired 内、B 上没有对应规则 | `missing` | **补建**，不清理 |
-| 映射不在 desired 内（从未配置 / 已删除 / 已停用 / 目标改为非 B / 关闭同步）、B 上却有带 `TunnelDesk-` 前缀的规则 | `orphans` | **清理** |
+| 映射在 desired 内、但规则端口 / 方向 / 协议 / 启用状态与期望不一致 | `stale` | **重建**（先删同名规则再建入站 + 出站） |
+| 映射不在 desired 内（从未配置 / 已删除 / 目标改为非 B / 关闭同步）、B 上却有带 `TunnelDesk-` 前缀的规则 | `orphans` | **清理** |
 
 - 判据是「规则名不在当前 desired 集合」，**不是「没人用」**——Windows 防火墙规则没有引用计数或可靠的最后命中时间，`Get-NetFirewallRule` 不返回此类信息，不实现基于「使用状态」的判定。
-- `firewall/manager.ts:91-129` 的 `sync()` 已实现 `missing` / `orphans` 两套逻辑，**复用即可，不重写**；本次主要改动落在 `app.ts:686` 的 desired 计算。
-- 清理范围：仅 `RULE_PREFIX = 'TunnelDesk-'` + `RULE_GROUP = 'TunnelDesk'`。现有 `list()`（`firewall/manager.ts:136`）已按 `Group` 枚举再本地过滤，别人建的规则即使闲置也不进入视野（C2、C3）。
+- `sync()` 不能只比较规则名：`list()` 同时读取 `LocalPort` / `Protocol` / `Enabled`，端口改动、只存在单方向、协议被改、规则被禁用都会触发重建。这样即使改端口时 SSH 离线、旧规则没能立即删除，重连后的对账也能修正。
+- 清理范围：仅 `RULE_PREFIX = 'TunnelDesk-'` + `RULE_GROUP = 'TunnelDesk'`。现有 `list()` 已按 `Group` 枚举再本地过滤，别人建的规则即使闲置也不进入视野（C2、C3）。
 
 ### 4.5 对账时机
 
@@ -283,7 +286,7 @@ desired = { 所有 enabled && syncFirewall && targetHost ∈ {localhost, 127.0.0
 | 「错误你也不用修复」 | C6、NT-2 |
 | 「额外附加点你要给我做了」 | FR-7 / 第 4 章 |
 | 「以我们命名规则创建的、工具里没配的，就是孤儿规则要干掉」 | 4.4、4.5、V-10 / V-11 |
-| 「配了但没开的不算清理对象」 | 4.4 `missing` 补建 |
+| 「配了但没开的不算清理对象」 | 4.4：desired 不包含 `enabled`；停用映射的规则保留并补建，只有映射记录删除 / 关闭同步 / 目标改为非 B 才清理 |
 | 「不要清别人建的，即使没用也保留」 | C2、C3、4.4 |
 | 「每隔 5 分钟或者一小时做定时排查清理」 | 4.5（采用事件驱动为主 + **1 小时**兜底，不做 5 分钟） |
 | 「只有 localhost/127.0.0.1 才算访问 B」 | 4.2 判定表 |
@@ -298,12 +301,13 @@ desired = { 所有 enabled && syncFirewall && targetHost ∈ {localhost, 127.0.0
 
 ## 11. 实施后修订记录（2026-11-10）
 
-实施与验证中发现两处需要修订的需求侧表述，均**未扩大范围、未改转发核心**：
+实施与验证中发现多处需要修订的需求侧表述，均**未扩大范围、未改转发核心**：
 
 1. **FR-5「半关闭语义无损」→「半关闭后连接干净回收」**。验证发现 `socket.pipe()` 的 end 级联会让「客户端发完数据立即 FIN 写方向、仍期待回包」丢失回包；用纯 `net` 两层代理可复现，属 Node pipe 固有行为而非 TunnelDesk 缺陷，且 HTTP / WebDAV / TDS / MySQL / Git 均在收到响应后才关闭，不受影响。曾尝试把 `channel.on('close')` 的 `destroy()` 改为 `end()`，验证**未解决问题**，已回退；`forward/manager.ts` 转发核心保持零改动，**C1 未被修订**。测试改为验证连接被干净回收、不泄漏。
 2. **FR-3 的 `[local-real]` Git 范围收窄**。本机 PortableGit 无 `git-daemon` / Smart HTTP 服务端，完整 clone / push 无法在本地起真实 Git 服务；改为「真实 git 客户端生成的二进制流经映射完整性验证」，完整操作交由 V-3 真实环境验收。
 3. **收尾代码审核（23:20）发现并修复一处并发缺口**：`removeMapping()` 原先直接下发远端命令、绕过 `syncFirewall()` 的串行链，定时兜底与配置变更仍可能并发。已抽出统一的 `enqueueFirewall()`，删除/改端口的规则清理、对账、1 小时兜底全部走同一条链，并补了对应单测（76 → 77 项）。同时删除验证脚本里一条恒真的假阳性检查（他人规则是否受影响本就无法由 mock 断言，改由真实环境 V-10 步骤 4 覆盖），并清理死常量与非 JSON 响应解析。随后补了 4 类运行时边界检查：`::1` 目标建规则、大小写与空格规范化、第三方改回 B 本机后规则补建、删除第三方映射不报错。
+4. **2026-11-11 复审修订**：明确「停用映射保留并补建规则，只有映射记录删除 / 关闭同步 / 目标改为非 B 才清理」；`firewallEligible` 不再包含 `enabled`；`sync()` 从按规则名比对升级为按名称 + 本地端口 + 方向 + 协议 + 启用状态比对，修复 SSH 离线改端口后旧规则无法回收、单方向缺失不补建的问题；修正映射卡片「防火墙同步」误报与 B 侧规则禁用仍显示「已放行」的 UI 问题。测试数 82，本地验证 26 项。
 
 另：为消除多 worker 并发写临时缓存的环境冲突，`server/package.json` 的 `test` 脚本固定为单 worker（`--pool=forks --maxWorkers=1 --minWorkers=1`），不改变任何业务配置（C8 保持）。
 
-交付验证：`npm test`（10 文件 / 77 项）、`npm run typecheck`、`npm run build` 全部通过；`tools/phase2-verify.mjs` 25 项本地检查全通过、原有 12 项 E2E 回归全通过；真实环境验收见 `docs/manual/phase2-acceptance-checklist.md`。
+交付验证：`npm test`（10 文件 / 82 项）、`npm run typecheck`、`npm run build` 全部通过；`tools/phase2-verify.mjs` 26 项本地检查全通过、原有 12 项 E2E 回归全通过；真实环境验收见 `docs/manual/phase2-acceptance-checklist.md`。

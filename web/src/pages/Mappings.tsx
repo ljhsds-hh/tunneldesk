@@ -301,7 +301,7 @@ export function MappingsPage() {
                       : '已停用'}
                   </span>
                   <div className="mapping__badges">
-                    {mapping.syncFirewall ? (
+                    {mapping.syncFirewall && isBLocalTarget(mapping.targetHost) ? (
                       <Badge tone="neutral">
                         <IconShield size={12} /> 防火墙同步
                       </Badge>

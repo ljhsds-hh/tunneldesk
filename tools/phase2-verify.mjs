@@ -340,6 +340,15 @@ async function main() {
   check('B-local mapping has TunnelDesk rule', rules.includes(`TunnelDesk-${httpId}`), rules.join(','));
   check('third-party mapping has no B-side rule', !rules.includes(`TunnelDesk-${thirdId}`), rules.join(','));
 
+  // ---- Disabling a mapping stops the local listener but keeps its B-side rule.
+  await api(`/api/mappings/${httpId}`, 'PATCH', { enabled: false });
+  const disabledKept = await waitFor(async () => {
+    const current = (await api('/api/state')).firewall.rules.map((rule) => rule.name);
+    return current.includes(`TunnelDesk-${httpId}`);
+  }, 10000, 'disabled mapping keeps rule');
+  check('disabled mapping keeps B-side rule', disabledKept);
+  await api(`/api/mappings/${httpId}`, 'PATCH', { enabled: true });
+
   await api(`/api/mappings/${httpId}`, 'PATCH', { targetHost: '10.20.30.41' });
   const recycled = await waitFor(async () => {
     const current = (await api('/api/state')).firewall.rules.map((rule) => rule.name);
