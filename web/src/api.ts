@@ -50,6 +50,14 @@ export const api = {
   updateMapping: (id: string, input: Record<string, unknown>) =>
     request<{ mapping: unknown }>(`/api/mappings/${id}`, 'PATCH', input),
   deleteMapping: (id: string) => request<{ ok: boolean }>(`/api/mappings/${id}`, 'DELETE'),
+  renameMappingGroup: (name: string, next: string) =>
+    request<{ renamed: number; name: string }>(`/api/mapping-groups/${encodeURIComponent(name)}`, 'PATCH', {
+      name: next,
+    }),
+  deleteMappingGroup: (name: string) =>
+    request<{ moved: number }>(`/api/mapping-groups/${encodeURIComponent(name)}`, 'DELETE'),
+  setMappingGroupOrder: (order: string[]) =>
+    request<{ order: string[] }>('/api/mapping-groups/order', 'PATCH', { order }),
   freePort: (preferred: number) =>
     request<{ port: number }>(`/api/ports/available?port=${preferred}`),
 

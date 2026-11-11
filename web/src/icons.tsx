@@ -145,6 +145,15 @@ export const IconChevron = (props: Props) => (
   </SVG>
 );
 
+export const IconGrip = (props: Props) => (
+  <SVG {...props}>
+    <path
+      d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"
+      strokeWidth={2.6}
+    />
+  </SVG>
+);
+
 export const IconPower = (props: Props) => (
   <SVG {...props}>
     <path d="M12 3v9" />

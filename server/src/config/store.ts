@@ -6,6 +6,7 @@ import { writeFileAtomicAsync } from '../util/atomic.js';
 import { appDataDir, ensureDir } from '../util/paths.js';
 import { validateBastionInput } from '../bastion/validate.js';
 import { BASTION_LOCAL_PORT } from '../bastion/command.js';
+import { normalizeGroupName, normalizeGroupOrder } from './groups.js';
 
 const CONFIG_VERSION = 2;
 
@@ -15,6 +16,7 @@ export function defaultConfig(): AppConfig {
     activeHostId: null,
     hosts: [],
     mappings: [],
+    mappingGroupOrder: [],
     proxy: {
       enabled: false,
       bindAddress: '127.0.0.1',
@@ -42,13 +44,15 @@ function coerceConfig(raw: unknown): AppConfig {
   const fallback = defaultConfig();
   if (!raw || typeof raw !== 'object') return fallback;
   const input = raw as Partial<AppConfig>;
+  const mappings = Array.isArray(input.mappings)
+    ? (input.mappings.map(coerceMapping).filter(Boolean) as MappingConfig[])
+    : [];
   return {
     version: CONFIG_VERSION,
     activeHostId: typeof input.activeHostId === 'string' ? input.activeHostId : null,
     hosts: Array.isArray(input.hosts) ? input.hosts.map(coerceHost).filter(Boolean) as HostConfig[] : [],
-    mappings: Array.isArray(input.mappings)
-      ? (input.mappings.map(coerceMapping).filter(Boolean) as MappingConfig[])
-      : [],
+    mappings,
+    mappingGroupOrder: normalizeGroupOrder(input.mappingGroupOrder, mappings),
     proxy: sanitizeProxy((input.proxy ?? {}) as Partial<ProxySettings>, fallback.proxy),
     bastion: coerceBastion(input.bastion),
     settings: { ...fallback.settings, ...(input.settings ?? {}) },
@@ -118,6 +122,7 @@ function coerceMapping(value: unknown): MappingConfig | null {
     enabled: Boolean(mapping.enabled ?? true),
     autoStart: Boolean(mapping.autoStart ?? true),
     syncFirewall: Boolean(mapping.syncFirewall ?? true),
+    group: normalizeGroupName(mapping.group),
     createdAt: String(mapping.createdAt ?? new Date().toISOString()),
     updatedAt: String(mapping.updatedAt ?? new Date().toISOString()),
   };

@@ -19,6 +19,12 @@ import { isPortFree, isValidHostname, isValidPort } from './util/net.js';
 import { SshLink } from './ssh/link.js';
 import { provisionHost, verifyKeyLogin } from './ssh/provision.js';
 import { FirewallManager, firewallOwned, type FirewallDesiredPort } from './firewall/manager.js';
+import {
+  clearGroupInConfig,
+  normalizeGroupName,
+  normalizeGroupOrder,
+  renameGroupInConfig,
+} from './config/groups.js';
 import { ForwardManager } from './forward/manager.js';
 import { HttpProxyServer } from './proxy/httpProxy.js';
 import { BastionManager, publicBastionProfile } from './bastion/manager.js';
@@ -62,6 +68,7 @@ export interface MappingInput {
   enabled?: boolean;
   syncFirewall?: boolean;
   autoStart?: boolean;
+  group?: string;
 }
 
 export class AppError extends Error {
@@ -192,6 +199,7 @@ export class App extends EventEmitter {
       host,
       bastion: this.bastion.snapshot(),
       mappings,
+      mappingGroupOrder: config.mappingGroupOrder,
       proxy: {
         ...config.proxy,
         runtime: {
@@ -584,12 +592,14 @@ export class App extends EventEmitter {
       enabled: input.enabled ?? true,
       autoStart: input.autoStart ?? true,
       syncFirewall: input.syncFirewall ?? true,
+      group: normalizeGroupName(input.group),
       createdAt: now,
       updatedAt: now,
     };
 
     await this.store.update((draft) => {
       draft.mappings.push(mapping);
+      draft.mappingGroupOrder = normalizeGroupOrder(draft.mappingGroupOrder, draft.mappings);
     });
     await this.forward.sync(this.store.get().mappings);
     await this.syncFirewall().catch(() => undefined);
@@ -635,7 +645,9 @@ export class App extends EventEmitter {
       if (input.enabled !== undefined) mapping.enabled = input.enabled;
       if (input.syncFirewall !== undefined) mapping.syncFirewall = input.syncFirewall;
       if (input.autoStart !== undefined) mapping.autoStart = input.autoStart;
+      if (input.group !== undefined) mapping.group = normalizeGroupName(input.group);
       mapping.updatedAt = new Date().toISOString();
+      draft.mappingGroupOrder = normalizeGroupOrder(draft.mappingGroupOrder, draft.mappings);
     });
 
     await this.forward.sync(this.store.get().mappings);
@@ -644,11 +656,67 @@ export class App extends EventEmitter {
     return this.store.get().mappings.find((mapping) => mapping.id === id) as MappingConfig;
   }
 
+  /**
+   * Renames a mapping group and moves every mapping that belongs to it.
+   * Purely a display concern: listeners, tunnels and firewall rules are untouched.
+   */
+  async renameMappingGroup(from: string, to: string): Promise<{ renamed: number; name: string }> {
+    const fromName = normalizeGroupName(from);
+    const toName = normalizeGroupName(to);
+    if (!fromName) throw new AppError('分组不存在', 404);
+    if (!toName) throw new AppError('分组名称不能为空（「未分组」是保留名称）');
+    const config = this.store.get();
+    const belongs = (name: string) => normalizeGroupName(name) === fromName;
+    if (!config.mappings.some((mapping) => belongs(mapping.group))) {
+      throw new AppError('分组不存在', 404);
+    }
+    if (
+      fromName !== toName &&
+      config.mappings.some((mapping) => !belongs(mapping.group) && normalizeGroupName(mapping.group) === toName)
+    ) {
+      throw new AppError(`分组「${toName}」已存在`);
+    }
+    let renamed = 0;
+    await this.store.update((draft) => {
+      renamed = renameGroupInConfig(draft, fromName, toName);
+      draft.mappingGroupOrder = normalizeGroupOrder(draft.mappingGroupOrder, draft.mappings);
+    });
+    this.emit('change');
+    return { renamed, name: toName };
+  }
+
+  /** Deletes a group view; its mappings fall back to "未分组" and stay untouched otherwise. */
+  async deleteMappingGroup(name: string): Promise<{ moved: number }> {
+    const target = normalizeGroupName(name);
+    if (!target) throw new AppError('「未分组」不能删除');
+    if (!this.store.get().mappings.some((mapping) => normalizeGroupName(mapping.group) === target)) {
+      throw new AppError('分组不存在', 404);
+    }
+    let moved = 0;
+    await this.store.update((draft) => {
+      moved = clearGroupInConfig(draft, target);
+    });
+    this.emit('change');
+    return { moved };
+  }
+
+  /** Persists the drag-and-drop group order after filtering out stale names. */
+  async setMappingGroupOrder(order: unknown): Promise<{ order: string[] }> {
+    let next: string[] = [];
+    await this.store.update((draft) => {
+      next = normalizeGroupOrder(order, draft.mappings);
+      draft.mappingGroupOrder = next;
+    });
+    this.emit('change');
+    return { order: next };
+  }
+
   async deleteMapping(id: string): Promise<void> {
     const mapping = this.store.get().mappings.find((item) => item.id === id);
     if (!mapping) throw new AppError('映射不存在', 404);
     await this.store.update((draft) => {
       draft.mappings = draft.mappings.filter((item) => item.id !== id);
+      draft.mappingGroupOrder = normalizeGroupOrder(draft.mappingGroupOrder, draft.mappings);
     });
     await this.forward.sync(this.store.get().mappings);
     if (this.link.isOnline()) {

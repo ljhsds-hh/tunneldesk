@@ -94,6 +94,8 @@ export interface MappingConfig {
   enabled: boolean;
   autoStart: boolean;
   syncFirewall: boolean;
+  /** 端口映射分组名；空字符串表示「未分组」。 */
+  group: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -117,6 +119,8 @@ export interface AppConfig {
   activeHostId: string | null;
   hosts: HostConfig[];
   mappings: MappingConfig[];
+  /** 分组展示顺序；只包含当前仍存在的分组，「未分组」不在其中。 */
+  mappingGroupOrder: string[];
   proxy: ProxySettings;
   bastion: BastionProfile | null;
   settings: {
@@ -203,6 +207,7 @@ export interface AppSnapshot {
   host: HostConfig | null;
   bastion: BastionSnapshot;
   mappings: Array<MappingConfig & { runtime: MappingRuntime }>;
+  mappingGroupOrder: string[];
   proxy: ProxySettings & { runtime: ProxyRuntime };
   firewall: {
     rules: FirewallRuleInfo[];

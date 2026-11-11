@@ -3,6 +3,7 @@ import {
   useId,
   useState,
   type ButtonHTMLAttributes,
+  type HTMLAttributes,
   type ReactNode,
 } from 'react';
 import { IconCheck, IconClose, IconCopy } from './icons';
@@ -58,12 +59,17 @@ export function Card({
   className = '',
   children,
   as: Tag = 'section',
-}: {
+  ...rest
+}: Omit<HTMLAttributes<HTMLElement>, 'children'> & {
   className?: string;
   children: ReactNode;
   as?: 'section' | 'div' | 'article';
 }) {
-  return <Tag className={`card ${className}`.trim()}>{children}</Tag>;
+  return (
+    <Tag className={`card ${className}`.trim()} {...rest}>
+      {children}
+    </Tag>
+  );
 }
 
 export function Badge({

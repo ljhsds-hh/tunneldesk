@@ -197,6 +197,7 @@ async function handleApi(app: App, req: http.IncomingMessage, res: http.ServerRe
       targetPort: Number(body.targetPort),
       enabled: body.enabled === undefined ? true : Boolean(body.enabled),
       syncFirewall: body.syncFirewall === undefined ? true : Boolean(body.syncFirewall),
+      group: asString(body.group),
     });
     sendJson(res, 201, { mapping });
     return;
@@ -215,6 +216,7 @@ async function handleApi(app: App, req: http.IncomingMessage, res: http.ServerRe
         targetPort: body.targetPort === undefined ? undefined : Number(body.targetPort),
         enabled: body.enabled === undefined ? undefined : Boolean(body.enabled),
         syncFirewall: body.syncFirewall === undefined ? undefined : Boolean(body.syncFirewall),
+        group: body.group === undefined ? undefined : asString(body.group),
       });
       sendJson(res, 200, { mapping });
       return;
@@ -222,6 +224,26 @@ async function handleApi(app: App, req: http.IncomingMessage, res: http.ServerRe
     if (method === 'DELETE') {
       await app.deleteMapping(id);
       sendJson(res, 200, { ok: true });
+      return;
+    }
+  }
+
+  if (method === 'PATCH' && pathname === '/api/mapping-groups/order') {
+    const body = await readJson(req);
+    sendJson(res, 200, await app.setMappingGroupOrder(body.order));
+    return;
+  }
+
+  const groupMatch = pathname.match(/^\/api\/mapping-groups\/([^/]+)$/);
+  if (groupMatch) {
+    const name = decodeURIComponent(groupMatch[1] ?? '');
+    if (method === 'PATCH') {
+      const body = await readJson(req);
+      sendJson(res, 200, await app.renameMappingGroup(name, asString(body.name)));
+      return;
+    }
+    if (method === 'DELETE') {
+      sendJson(res, 200, await app.deleteMappingGroup(name));
       return;
     }
   }
