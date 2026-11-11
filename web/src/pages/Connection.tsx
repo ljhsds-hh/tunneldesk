@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api, formatRelative } from '../api';
+import { api, formatRelative, formatSince } from '../api';
 import {
   IconBolt,
   IconCheck,
@@ -47,6 +47,7 @@ export function ConnectionPage() {
   const [testing, setTesting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [editType, setEditType] = useState<ConnectionType>('ssh');
@@ -142,13 +143,19 @@ export function ConnectionPage() {
 
   const remove = async () => {
     if (!host) return;
+    setRemoving(true);
     try {
-      await api.removeHost(host.id);
-      toast('主机配置已删除', 'info');
+      const result = await api.removeHost(host.id);
+      const removed = result.mappingsRemoved ? `，同时删除 ${result.mappingsRemoved} 条映射` : '';
+      const cleaned = result.rulesCleaned ? `，已清理 ${result.rulesCleaned} 条 B 侧规则` : '';
+      toast(`主机配置已删除${removed}${cleaned}`, 'info');
+      if (result.cleanupNote) toast(result.cleanupNote, 'error');
       setConfirmDelete(false);
       await refresh();
     } catch (err) {
       toast((err as Error).message, 'error');
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -425,7 +432,7 @@ export function ConnectionPage() {
                 </div>
                 <div>
                   <span>已保持</span>
-                  <strong>{link?.since ? formatRelative(link.since).replace('前', '') : '—'}</strong>
+                  <strong>{formatSince(link?.since ?? null)}</strong>
                 </div>
                 <div>
                   <span>主机指纹</span>
@@ -458,14 +465,14 @@ export function ConnectionPage() {
 
             <div className="stat-stack">
               <div className="stat stat--card">
-                <span className="stat__label">自动重连</span>
+                <span className="stat__label">隧道开关</span>
                 <div className="stat__inline">
                   <Toggle
-                    checked={Boolean(snap && snap.link.state !== 'idle')}
+                    checked={online}
                     onChange={() => void (online ? disconnect() : connect())}
-                    label="切换连接"
+                    label="建立或断开 SSH 隧道"
                   />
-                  <span className="muted small">{online ? '点击断开' : '点击连接'}</span>
+                  <span className="muted small">{online ? '在线 · 点击断开' : '离线 · 点击连接'}</span>
                 </div>
               </div>
               <div className="stat stat--card">
@@ -629,8 +636,9 @@ export function ConnectionPage() {
       <ConfirmDialog
         open={confirmDelete}
         title="删除这台主机？"
-        description="将断开连接并删除该主机下的所有映射配置。B 上的密钥与防火墙规则需要重新配置后才会变化。"
+        description="将断开连接并删除该主机下的所有映射配置；工具会自动清理它在 B 上创建的 TunnelDesk 防火墙规则（非当前主机时会临时建立一次连接）。"
         confirmText="删除主机"
+        busy={removing}
         onCancel={() => setConfirmDelete(false)}
         onConfirm={() => void remove()}
       />

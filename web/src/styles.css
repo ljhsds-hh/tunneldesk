@@ -2153,8 +2153,8 @@ code,
 
 .mapping__stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
   padding-top: 2px;
 }
 
@@ -2162,6 +2162,7 @@ code,
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 .mapping__stats span {
@@ -2171,9 +2172,12 @@ code,
 }
 
 .mapping__stats strong {
-  font-size: 12.5px;
+  font-size: 11.5px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mapping__foot {
@@ -3351,4 +3355,113 @@ code,
   .bastion-grid__wide {
     grid-column: auto;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Run log panel (overview → 查看全部)
+   --------------------------------------------------------------------------- */
+
+.log-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.log-tools__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.log-tools__search {
+  flex: 1 1 180px;
+  min-width: 160px;
+}
+
+.log-tools__path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.log-tools__path code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+.log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 54vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.log-row {
+  display: grid;
+  grid-template-columns: 138px 58px 76px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  line-height: 1.5;
+  border-left: 2px solid transparent;
+}
+
+.log-row:hover {
+  background: var(--surface-2);
+}
+
+.log-row--warn {
+  border-left-color: var(--warn);
+}
+
+.log-row--error {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.log-row__time {
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.log-row__scope {
+  color: var(--accent);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-row__msg {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .log-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
+/* Stale-data warning shown when the SSE stream drops. */
+.live-note {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--warn) 38%, transparent);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 11.5px;
+  line-height: 1.4;
 }

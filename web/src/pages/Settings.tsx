@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { api } from '../api';
+import { api, formatDuration } from '../api';
 import { IconBolt, IconClock, IconLock, IconMoon, IconServer, IconSun } from '../icons';
 import { Badge, Button, Card, CopyButton, Field, PageHeader, Toggle } from '../ui';
 import { useApp } from '../App';
+import { APP_VERSION } from '../version';
 
 export function SettingsPage() {
   const { snap, refresh, toast, theme, toggleTheme } = useApp();
@@ -147,8 +148,13 @@ export function SettingsPage() {
             <CopyButton value={snap ? `${snap.dataDir}\\keys` : ''} />
           </div>
           <div className="data-row">
+            <span>运行日志</span>
+            <code>{snap ? `${snap.dataDir}\\logs` : '—'}</code>
+            <CopyButton value={snap ? `${snap.dataDir}\\logs` : ''} />
+          </div>
+          <div className="data-row">
             <span>运行时长</span>
-            <code>{snap ? `${Math.floor(snap.uptimeMs / 60000)} 分钟` : '—'}</code>
+            <code>{snap ? formatDuration(snap.uptimeMs) : '—'}</code>
             <Badge tone="ok" dot>
               运行中
             </Badge>
@@ -168,7 +174,8 @@ export function SettingsPage() {
             <span className="eyebrow">ABOUT</span>
             <h3>TunnelDesk</h3>
             <p>
-              面向个人工作流的 SSH 访问控制台：端口映射与内网 HTTP 代理分离为两个业务，B 端零安装。版本 0.1.0 · MIT。
+              面向个人工作流的 SSH 访问控制台：端口映射与内网 HTTP 代理分离为两个业务，B 端零安装。版本{' '}
+              {snap?.version ?? APP_VERSION} · MIT。
             </p>
           </div>
           <ul className="about__facts">

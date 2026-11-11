@@ -60,6 +60,11 @@ function isBLocalTarget(targetHost: string): boolean {
   return B_LOCAL_TARGETS.has(targetHost.trim().toLowerCase());
 }
 
+/** A wildcard bind exposes the port on every interface, so label it honestly. */
+function isWildcardBind(address: string): boolean {
+  return address === '0.0.0.0' || address === '::' || address === '';
+}
+
 /** 分组名最大长度，与 server/src/config/groups.ts 保持一致。 */
 const GROUP_NAME_MAX = 24;
 const GROUP_SUGGESTIONS = ['数据库', '远程桌面', 'Web', '文件共享', '其他'];
@@ -472,8 +477,12 @@ export function MappingsPage() {
 
         <div className="mapping__route">
           <div className="route-node">
-            <span className="route-node__label">A 本机</span>
-            <code>127.0.0.1:{mapping.localPort}</code>
+            <span className="route-node__label">
+              {isWildcardBind(mapping.bindAddress) ? 'A 任意网卡' : 'A 本机'}
+            </span>
+            <code>
+              {mapping.bindAddress}:{mapping.localPort}
+            </code>
           </div>
           <span className="route-arrow">
             <IconArrow size={16} />
@@ -498,6 +507,10 @@ export function MappingsPage() {
           <div>
             <span>下行</span>
             <strong>{formatRate(runtime.rateIn)}</strong>
+          </div>
+          <div>
+            <span>上行</span>
+            <strong>{formatRate(runtime.rateOut)}</strong>
           </div>
           <div>
             <span>累计</span>

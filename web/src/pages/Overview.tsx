@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { api, formatBytes, formatDuration, formatRate, formatRelative } from '../api';
 import {
   IconArrow,
@@ -11,9 +12,11 @@ import {
 } from '../icons';
 import { Badge, Button, Card, PageHeader, Sparkline, StatTile, StatusPill } from '../ui';
 import { useApp } from '../App';
+import { LogPanel } from './LogPanel';
 
 export function OverviewPage() {
   const { snap, history, navigate, toast } = useApp();
+  const [logOpen, setLogOpen] = useState(false);
 
   if (!snap) {
     return (
@@ -145,7 +148,9 @@ export function OverviewPage() {
               </h2>
               <p className="hero__sub">
                 {online
-                  ? `已保持 ${uptime} · 自动重连已启用`
+                  ? `已保持 ${uptime} · ${
+                      snap.settings.reconnect ? '自动重连已启用' : '自动重连已关闭'
+                    }`
                   : snap.link.lastError ?? '点击“建立连接”开始使用，程序会自动重试并恢复服务'}
               </p>
             </div>
@@ -298,7 +303,9 @@ export function OverviewPage() {
               <h3>最近活动</h3>
               <p>连接、映射与防火墙的实时事件</p>
             </div>
-            <IconBolt size={16} className="muted" />
+            <Button size="sm" variant="quiet" icon={<IconBolt size={14} />} onClick={() => setLogOpen(true)}>
+              查看全部
+            </Button>
           </div>
           <div className="activity__list">
             {snap.logs.slice(-7).reverse().map((entry) => (
@@ -335,6 +342,8 @@ export function OverviewPage() {
           </ul>
         </Card>
       </div>
+
+      <LogPanel open={logOpen} onClose={() => setLogOpen(false)} />
     </>
   );
 }

@@ -6,6 +6,18 @@
     <meta name="color-scheme" content="dark light" />
     <title>TunnelDesk · 隧道控制台</title>
     <meta name="description" content="TunnelDesk - 端口映射与内网代理控制台" />
+    <script>
+      // Apply the saved theme before the first paint: React mounts later, and
+      // without this a light-theme user sees a dark flash on every reload.
+      try {
+        var savedTheme = localStorage.getItem('tunneldesk-theme');
+        if (savedTheme === 'light' || savedTheme === 'dark') {
+          document.documentElement.dataset.theme = savedTheme;
+        }
+      } catch (error) {
+        /* private mode: keep the default dark theme */
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

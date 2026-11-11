@@ -151,6 +151,8 @@ export interface LogEntry {
 
 export interface AppSnapshot {
   serverTime: string;
+  /** Server version, read from the repository root package.json. */
+  version: string;
   uptimeMs: number;
   dataDir: string;
   settings: {

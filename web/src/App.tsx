@@ -17,6 +17,7 @@ import { MappingsPage } from './pages/Mappings';
 import { ProxyPage } from './pages/Proxy';
 import { ConnectionPage } from './pages/Connection';
 import { SettingsPage } from './pages/Settings';
+import { APP_VERSION } from './version';
 
 export type Route = 'overview' | 'mappings' | 'proxy' | 'connection' | 'settings';
 
@@ -67,6 +68,7 @@ export default function App() {
   const [snap, setSnap] = useState<AppSnapshot | null>(null);
   const [route, setRoute] = useState<Route>(parseRoute);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [live, setLive] = useState<boolean | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>(
     () => (localStorage.getItem('tunneldesk-theme') === 'light' ? 'light' : 'dark'),
   );
@@ -124,9 +126,12 @@ export default function App() {
   useEffect(() => {
     void refresh();
     const source = new EventSource('/api/events');
+    source.onopen = () => setLive(true);
+    source.onerror = () => setLive(false);
     source.onmessage = (event) => {
       try {
         setSnap(JSON.parse(event.data) as AppSnapshot);
+        setLive(true);
       } catch {
         /* ignore malformed frame */
       }
@@ -207,6 +212,11 @@ export default function App() {
           </nav>
 
           <div className="sidebar__foot">
+            {live === false ? (
+              <div className="live-note" role="status" title="实时数据流已中断，页面上的数字可能已经过期">
+                实时连接中断，正在重连…
+              </div>
+            ) : null}
             <div className="linkcard">
               <div className="linkcard__top">
                 <span className="linkcard__name">{snap?.host?.name ?? '未配置主机'}</span>
@@ -219,7 +229,7 @@ export default function App() {
               </span>
               <StatusPill state={snap?.link.state ?? 'idle'} detail={snap?.link.lastError} />
             </div>
-            <span className="sidebar__version">v0.2.0 · 本地控制台</span>
+            <span className="sidebar__version">v{APP_VERSION} · 本地控制台</span>
           </div>
         </aside>
 

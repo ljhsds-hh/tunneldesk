@@ -1,4 +1,4 @@
-import type { AppSnapshot } from './types';
+import type { AppSnapshot, LogEntry, ProxyLog } from './types';
 
 async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(path, {
@@ -18,6 +18,9 @@ async function request<T>(path: string, method = 'GET', body?: unknown): Promise
 export const api = {
   state: () => request<AppSnapshot>('/api/state'),
 
+  /** Full in-memory buffers (up to the logger ring size), for the log panel. */
+  logs: () => request<{ logs: LogEntry[]; proxyLogs: ProxyLog[] }>('/api/logs'),
+
   setupHost: (input: {
     name?: string;
     connectionType?: 'ssh' | 'azure-bastion';
@@ -36,7 +39,11 @@ export const api = {
     id: string,
     input: { connectionType: 'ssh' | 'azure-bastion'; host?: string; port?: number },
   ) => request<{ ok: boolean }>(`/api/hosts/${id}/connection`, 'PUT', input),
-  removeHost: (id: string) => request<{ ok: boolean }>(`/api/hosts/${id}`, 'DELETE'),
+  removeHost: (id: string) =>
+    request<{ ok: boolean; mappingsRemoved?: number; rulesCleaned?: number; cleanupNote?: string | null }>(
+      `/api/hosts/${id}`,
+      'DELETE',
+    ),
 
   saveBastion: (input: Record<string, unknown>) => request<{ profile: unknown }>('/api/bastion', 'PUT', input),
   resetBastion: () => request<{ ok: boolean }>('/api/bastion', 'DELETE'),
@@ -100,6 +107,20 @@ export function formatClock(iso: string): string {
   } catch {
     return '—';
   }
+}
+
+export function formatDateTime(iso: string): string {
+  const value = new Date(iso);
+  if (Number.isNaN(value.getTime())) return iso;
+  return value.toLocaleString('zh-CN', { hour12: false });
+}
+
+/** Elapsed time since `iso`, e.g. for "已保持 3 小时 12 分" (no trailing 「前」). */
+export function formatSince(iso: string | null): string {
+  if (!iso) return '—';
+  const started = new Date(iso).getTime();
+  if (!Number.isFinite(started)) return '—';
+  return formatDuration(Date.now() - started);
 }
 
 export function formatRelative(iso: string | null): string {

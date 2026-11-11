@@ -416,7 +416,7 @@ export function ProxyPage() {
               <IconLock size={14} /> <span>HTTPS 站点通过 CONNECT 隧道转发，证书校验仍由客户端完成</span>
             </li>
             <li>
-              <IconCopy size={14} /> <span>首版仅支持 HTTP/CONNECT，SOCKS5 与 UDP 已在架构中预留</span>
+              <IconCopy size={14} /> <span>当前仅支持 HTTP 与 CONNECT(HTTPS)；SOCKS5、UDP 不在支持范围内</span>
             </li>
           </ul>
         </Card>
