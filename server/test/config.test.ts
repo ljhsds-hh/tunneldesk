@@ -75,6 +75,54 @@ describe('ConfigStore', () => {
     expect(config.proxy.routingMode).toBe('whitelist');
     expect(config.proxy.whitelist).toEqual(['10.1.2.3']);
   });
+
+  it('loads pre-grouping configs into the ungrouped bucket', async () => {
+    fs.writeFileSync(
+      configPath(),
+      JSON.stringify({
+        version: 1,
+        activeHostId: null,
+        hosts: [],
+        mappings: [
+          {
+            id: 'map_legacy',
+            name: '旧版映射',
+            hostId: 'host_legacy',
+            bindAddress: '127.0.0.1',
+            localPort: 13389,
+            targetHost: '127.0.0.1',
+            targetPort: 3389,
+            enabled: true,
+            autoStart: true,
+            syncFirewall: true,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+        proxy: {
+          enabled: false,
+          bindAddress: '127.0.0.1',
+          port: 8888,
+          allowLan: false,
+          logLimit: 200,
+          routingMode: 'all',
+          whitelist: [],
+        },
+        settings: {
+          theme: 'dark',
+          startProxyOnBoot: false,
+          startMappingsOnBoot: true,
+          reconnect: true,
+        },
+      }),
+    );
+
+    const store = new ConfigStore();
+    const config = await store.load();
+    expect(config.mappings).toHaveLength(1);
+    expect(config.mappings[0]?.group).toBe('');
+    expect(config.mappingGroupOrder).toEqual([]);
+  });
 });
 
 describe('mapping groups', () => {

@@ -228,7 +228,7 @@ async function handleApi(app: App, req: http.IncomingMessage, res: http.ServerRe
     }
   }
 
-  if (method === 'PATCH' && pathname === '/api/mapping-groups/order') {
+  if (method === 'PUT' && pathname === '/api/mapping-groups') {
     const body = await readJson(req);
     sendJson(res, 200, await app.setMappingGroupOrder(body.order));
     return;

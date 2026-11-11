@@ -57,7 +57,7 @@ export const api = {
   deleteMappingGroup: (name: string) =>
     request<{ moved: number }>(`/api/mapping-groups/${encodeURIComponent(name)}`, 'DELETE'),
   setMappingGroupOrder: (order: string[]) =>
-    request<{ order: string[] }>('/api/mapping-groups/order', 'PATCH', { order }),
+    request<{ order: string[] }>('/api/mapping-groups', 'PUT', { order }),
   freePort: (preferred: number) =>
     request<{ port: number }>(`/api/ports/available?port=${preferred}`),
 

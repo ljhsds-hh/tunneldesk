@@ -67,7 +67,8 @@ const UNGROUPED_LABEL = '未分组';
 const COLLAPSED_KEY = 'tunneldesk.mappings.collapsed-groups';
 
 /** Mirrors server/src/config/groups.ts normalizeGroupName. */
-function normalizeGroupName(value: string): string {
+function normalizeGroupName(value: unknown): string {
+  if (typeof value !== 'string') return '';
   const text = value
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -123,7 +124,7 @@ export function MappingsPage() {
     return mappings.filter(
       (mapping) =>
         mapping.name.toLowerCase().includes(needle) ||
-        mapping.group.toLowerCase().includes(needle) ||
+        normalizeGroupName(mapping.group).toLowerCase().includes(needle) ||
         String(mapping.localPort).includes(needle) ||
         String(mapping.targetPort).includes(needle) ||
         mapping.targetHost.toLowerCase().includes(needle),
@@ -188,7 +189,7 @@ export function MappingsPage() {
     setEditing(mapping);
     setForm({
       name: mapping.name,
-      group: mapping.group,
+      group: normalizeGroupName(mapping.group),
       localPort: String(mapping.localPort),
       targetHost: mapping.targetHost,
       targetPort: String(mapping.targetPort),
@@ -458,7 +459,7 @@ export function MappingsPage() {
         <div className="mapping__head">
           <span className={`dot dot--${tone === 'ok' ? 'ok' : tone === 'danger' ? 'danger' : 'idle'}`} />
           <h3>{mapping.name}</h3>
-          {showGroup ? <Badge tone="neutral">{groupLabel(mapping.group)}</Badge> : null}
+          {showGroup ? <Badge tone="neutral">{groupLabel(normalizeGroupName(mapping.group))}</Badge> : null}
           <div className="mapping__actions">
             <IconButton label="编辑" onClick={() => openEdit(mapping)}>
               <IconEdit size={15} />

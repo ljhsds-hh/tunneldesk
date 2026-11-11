@@ -48,6 +48,7 @@ beforeAll(async () => {
     enabled: true,
     autoStart: true,
     syncFirewall: false,
+    group: '',
     createdAt: '2026-11-10T00:00:00.000Z',
     updatedAt: '2026-11-10T00:00:00.000Z',
   };

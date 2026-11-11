@@ -17,6 +17,7 @@ function makeMapping(overrides: Partial<MappingConfig> = {}): MappingConfig {
     enabled: true,
     autoStart: true,
     syncFirewall: true,
+    group: '',
     createdAt: '2026-11-10T00:00:00.000Z',
     updatedAt: '2026-11-10T00:00:00.000Z',
     ...overrides,
