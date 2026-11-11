@@ -62,7 +62,7 @@ export function MappingsPage() {
   const [deleting, setDeleting] = useState<Mapping | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const firewallEligible = isBLocalTarget(form.targetHost);
+  const targetIsBLocal = isBLocalTarget(form.targetHost);
   const mappings = snap?.mappings ?? [];
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -384,15 +384,17 @@ export function MappingsPage() {
           <div className="form__switch">
             <div>
               <strong>在 B 上同步防火墙规则</strong>
-              {firewallEligible ? (
-                <p>自动为 {form.targetPort || '目标端口'} 创建入站 + 出站 TCP 规则；删除映射时一并清理，避免规则堆积。</p>
+              {!targetIsBLocal ? (
+                <p>目标地址不是 B 本机，B 上不需要开放端口，同步会被忽略（不会创建规则）。若这确实是 B 本机，请改填 127.0.0.1。</p>
+              ) : form.syncFirewall ? (
+                <p>自动为 {form.targetPort || '目标端口'} 创建 / 修复入站 + 出站 TCP 规则；删除映射时一并清理，避免规则堆积。</p>
               ) : (
-                <p>目标地址不是 B 本机，B 上不需要开放端口，已强制关闭同步。若这确实是 B 本机，请改填 127.0.0.1。</p>
+                <p>已关闭同步：现有规则保留，但不会自动补建或修复；删除映射时仍会清理对应规则。</p>
               )}
             </div>
             <Toggle
-              checked={form.syncFirewall && firewallEligible}
-              disabled={!firewallEligible}
+              checked={form.syncFirewall && targetIsBLocal}
+              disabled={!targetIsBLocal}
               onChange={(next) => setForm({ ...form, syncFirewall: next })}
               label="同步防火墙"
             />

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isBLocalTarget, isValidHostname } from '../src/util/net.js';
-import { FirewallManager, firewallEligible, ruleNameFor } from '../src/firewall/manager.js';
+import { FirewallManager, firewallEligible, firewallOwned, ruleNameFor } from '../src/firewall/manager.js';
 import { Logger } from '../src/util/logger.js';
 import type { SshLink } from '../src/ssh/link.js';
 import type { MappingConfig } from '../src/types.js';
@@ -99,7 +99,7 @@ describe('firewallEligible', () => {
     expect(firewallEligible(makeMapping({ targetHost: 'LOCALHOST' }))).toBe(true);
   });
 
-  it('keeps disabled mappings in the desired set so their rules are retained', () => {
+  it('keeps disabled mappings in the auto-maintained set so their rules are retained', () => {
     const mappings = [
       makeMapping({ id: 'map_b', targetHost: '127.0.0.1' }),
       makeMapping({ id: 'map_third', targetHost: 'db.corp.local' }),
@@ -107,6 +107,24 @@ describe('firewallEligible', () => {
       makeMapping({ id: 'map_optout', syncFirewall: false }),
     ];
     expect(mappings.filter(firewallEligible).map((m) => m.id)).toEqual(['map_b', 'map_off']);
+  });
+});
+
+describe('firewallOwned', () => {
+  it('is governed by targetHost only, so disabling or turning sync off never orphans a rule', () => {
+    const mappings = [
+      makeMapping({ id: 'map_b', targetHost: '127.0.0.1' }),
+      makeMapping({ id: 'map_third', targetHost: 'db.corp.local' }),
+      makeMapping({ id: 'map_off', enabled: false }),
+      makeMapping({ id: 'map_optout', syncFirewall: false }),
+      makeMapping({ id: 'map_ipv6', targetHost: '::1' }),
+    ];
+    expect(mappings.filter(firewallOwned).map((m) => m.id)).toEqual([
+      'map_b',
+      'map_off',
+      'map_optout',
+      'map_ipv6',
+    ]);
   });
 });
 
@@ -159,7 +177,7 @@ describe('FirewallManager.sync reconciliation', () => {
 
   it('creates missing rules for desired entries', async () => {
     const { manager, scripts } = makeManager();
-    const result = await manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1' }]);
+    const result = await manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1', sync: true }]);
     expect(result.added).toBe(1);
     expect(scripts.some((s) => s.includes('New-NetFirewallRule'))).toBe(true);
   });
@@ -169,7 +187,7 @@ describe('FirewallManager.sync reconciliation', () => {
       ruleLine('TunnelDesk-map_b', 'Inbound', 3389),
       ruleLine('TunnelDesk-map_b', 'Outbound', 3389),
     ]);
-    const result = await manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1' }]);
+    const result = await manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1', sync: true }]);
     expect(result).toEqual({ added: 0, removed: 0 });
     expect(scripts.some((s) => s.includes('New-NetFirewallRule'))).toBe(false);
     expect(scripts.some((s) => s.includes('Remove-NetFirewallRule'))).toBe(false);
@@ -180,7 +198,7 @@ describe('FirewallManager.sync reconciliation', () => {
       ruleLine('TunnelDesk-map_b', 'Inbound', 3389),
       ruleLine('TunnelDesk-map_b', 'Outbound', 3389),
     ]);
-    const result = await manager.sync([{ mappingId: 'map_b', port: 3390, targetHost: '127.0.0.1' }]);
+    const result = await manager.sync([{ mappingId: 'map_b', port: 3390, targetHost: '127.0.0.1', sync: true }]);
     expect(result.added).toBe(1);
     expect(scripts.some((s) => s.includes('Remove-NetFirewallRule'))).toBe(true);
     const created = scripts.find((s) => s.includes('New-NetFirewallRule')) ?? '';
@@ -189,9 +207,41 @@ describe('FirewallManager.sync reconciliation', () => {
 
   it('recreates a rule when one direction is missing', async () => {
     const { manager, scripts } = makeManager([ruleLine('TunnelDesk-map_b', 'Inbound', 3389)]);
-    const result = await manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1' }]);
+    const result = await manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1', sync: true }]);
     expect(result.added).toBe(1);
     expect(scripts.some((s) => s.includes('New-NetFirewallRule'))).toBe(true);
+  });
+
+  it('keeps an existing rule but does not create a missing one when sync is off', async () => {
+    const existing = makeManager([
+      ruleLine('TunnelDesk-map_off', 'Inbound', 3389),
+      ruleLine('TunnelDesk-map_off', 'Outbound', 3389),
+    ]);
+    const kept = await existing.manager.sync([
+      { mappingId: 'map_off', port: 3389, targetHost: '127.0.0.1', sync: false },
+    ]);
+    expect(kept).toEqual({ added: 0, removed: 0 });
+    expect(existing.scripts.some((s) => s.includes('Remove-NetFirewallRule'))).toBe(false);
+
+    const missing = makeManager();
+    const notCreated = await missing.manager.sync([
+      { mappingId: 'map_off', port: 3389, targetHost: '127.0.0.1', sync: false },
+    ]);
+    expect(notCreated).toEqual({ added: 0, removed: 0 });
+    expect(missing.scripts.some((s) => s.includes('New-NetFirewallRule'))).toBe(false);
+  });
+
+  it('leaves a stale rule untouched while sync is off', async () => {
+    const { manager, scripts } = makeManager([
+      ruleLine('TunnelDesk-map_off', 'Inbound', 3389),
+      ruleLine('TunnelDesk-map_off', 'Outbound', 3389),
+    ]);
+    const result = await manager.sync([
+      { mappingId: 'map_off', port: 3390, targetHost: '127.0.0.1', sync: false },
+    ]);
+    expect(result).toEqual({ added: 0, removed: 0 });
+    expect(scripts.some((s) => s.includes('New-NetFirewallRule'))).toBe(false);
+    expect(scripts.some((s) => s.includes('Remove-NetFirewallRule'))).toBe(false);
   });
 
   it('recreates a rule when it is disabled or has the wrong protocol', async () => {
@@ -201,7 +251,7 @@ describe('FirewallManager.sync reconciliation', () => {
     ]);
     expect(
       (
-        await disabled.manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1' }])
+        await disabled.manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1', sync: true }])
       ).added,
     ).toBe(1);
 
@@ -210,7 +260,7 @@ describe('FirewallManager.sync reconciliation', () => {
       ruleLine('TunnelDesk-map_b', 'Outbound', 3389, true, 'UDP'),
     ]);
     expect(
-      (await udp.manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1' }])).added,
+      (await udp.manager.sync([{ mappingId: 'map_b', port: 3389, targetHost: '127.0.0.1', sync: true }])).added,
     ).toBe(1);
   });
 });

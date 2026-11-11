@@ -349,6 +349,15 @@ async function main() {
   check('disabled mapping keeps B-side rule', disabledKept);
   await api(`/api/mappings/${httpId}`, 'PATCH', { enabled: true });
 
+  // ---- Turning sync off keeps existing rules but stops automatic repair/creation.
+  await api(`/api/mappings/${httpId}`, 'PATCH', { syncFirewall: false });
+  const syncOffKept = await waitFor(async () => {
+    const current = (await api('/api/state')).firewall.rules.map((rule) => rule.name);
+    return current.includes(`TunnelDesk-${httpId}`);
+  }, 10000, 'sync off keeps rule');
+  check('sync off keeps B-side rule', syncOffKept);
+  await api(`/api/mappings/${httpId}`, 'PATCH', { syncFirewall: true });
+
   await api(`/api/mappings/${httpId}`, 'PATCH', { targetHost: '10.20.30.41' });
   const recycled = await waitFor(async () => {
     const current = (await api('/api/state')).firewall.rules.map((rule) => rule.name);

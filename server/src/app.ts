@@ -18,7 +18,7 @@ import { appDataDir, keysDir, newId } from './util/paths.js';
 import { isPortFree, isValidHostname, isValidPort } from './util/net.js';
 import { SshLink } from './ssh/link.js';
 import { provisionHost, verifyKeyLogin } from './ssh/provision.js';
-import { FirewallManager, firewallEligible, type FirewallDesiredPort } from './firewall/manager.js';
+import { FirewallManager, firewallOwned, type FirewallDesiredPort } from './firewall/manager.js';
 import { ForwardManager } from './forward/manager.js';
 import { HttpProxyServer } from './proxy/httpProxy.js';
 import { BastionManager, publicBastionProfile } from './bastion/manager.js';
@@ -624,11 +624,6 @@ export class App extends EventEmitter {
       throw new AppError(`本地端口 ${localPort} 已被系统其他程序占用`);
     }
 
-    const portChanged = targetPort !== existing.targetPort && existing.syncFirewall;
-    if (portChanged) {
-      await this.enqueueFirewall(() => this.firewall.removeMapping(id)).catch(() => undefined);
-    }
-
     await this.store.update((draft) => {
       const mapping = draft.mappings.find((item) => item.id === id);
       if (!mapping) return;
@@ -703,11 +698,12 @@ export class App extends EventEmitter {
       if (!this.link.isOnline()) return { added: 0, removed: 0 };
       const desired: FirewallDesiredPort[] = this.store
         .get()
-        .mappings.filter(firewallEligible)
+        .mappings.filter(firewallOwned)
         .map((mapping) => ({
           mappingId: mapping.id,
           port: mapping.targetPort,
           targetHost: mapping.targetHost,
+          sync: mapping.syncFirewall,
         }));
       return this.firewall.sync(desired);
     });

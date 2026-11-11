@@ -28,19 +28,29 @@ export interface FirewallDesiredPort {
   mappingId: string;
   port: number;
   targetHost: string;
+  /** true: 自动创建/修复；false: 只保留已有规则，不新建也不修复。 */
+  sync: boolean;
 }
 
 /**
- * A mapping needs a B-side firewall rule whenever it opts in and targets B
- * itself. `enabled` is deliberately not part of this test: disabling a mapping
- * only stops the local listener, it does not invalidate the B-side rule. The
- * rule is removed only when the mapping record disappears, sync is turned off,
- * or the target becomes a third-party address.
+ * Whether TunnelDesk should automatically create / repair the B-side rule.
+ * `enabled` is deliberately not part of this test: disabling a mapping only
+ * stops the local listener, it does not invalidate the B-side rule.
  */
 export function firewallEligible(
   mapping: Pick<MappingConfig, 'syncFirewall' | 'targetHost'>,
 ): boolean {
   return mapping.syncFirewall && isBLocalTarget(mapping.targetHost);
+}
+
+/**
+ * Ownership is independent of `enabled` / `syncFirewall`: any existing mapping
+ * whose target is B itself owns a rule. Rules outside this set are orphans.
+ * `syncFirewall=false` means "keep the current rule but stop creating/repairing
+ * it"; only deleting the mapping (or changing target away from B) removes it.
+ */
+export function firewallOwned(mapping: Pick<MappingConfig, 'targetHost'>): boolean {
+  return isBLocalTarget(mapping.targetHost);
 }
 
 /**
@@ -107,9 +117,10 @@ export class FirewallManager {
   }
 
   /**
-   * Reconciles the B-side rules with the desired set: creates what is missing
-   * or out of date (port / direction / protocol / enabled), deletes orphans
-   * (rules whose mapping record no longer exists, sync was turned off, or the
+   * Reconciles the B-side rules with the owned set: creates what is missing or
+   * out of date (port / direction / protocol / enabled) for mappings that have
+   * auto-sync on, keeps existing rules for mappings that turned it off, and
+   * deletes orphans (rules whose mapping record no longer exists or whose
    * target moved to a third-party address).
    */
   async sync(desired: FirewallDesiredPort[]): Promise<{ added: number; removed: number }> {
@@ -141,6 +152,8 @@ export class FirewallManager {
 
     let added = 0;
     for (const [name, item] of desiredByName) {
+      // syncFirewall=false: keep what exists, but do not create or repair it.
+      if (!item.sync) continue;
       const rules = existingByName.get(name) ?? [];
       if (this.rulesAreCurrent(rules, item)) continue;
       const mapping = {
