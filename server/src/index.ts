@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { App } from './app.js';
 import { startConsoleServer } from './api/server.js';
+import { APP_VERSION } from './version.js';
 
 interface CliOptions {
   port: number;
@@ -31,8 +33,9 @@ await app.init();
 const server = await startConsoleServer(app, { port: options.port, host: options.host });
 const url = `http://127.0.0.1:${options.port}`;
 
-app.logger.info('console', `控制台已启动：${url}`);
+app.logger.info('console', `TunnelDesk v${APP_VERSION} 控制台已启动：${url}`);
 app.logger.info('config', `配置目录：${app.dataDir()}`);
+app.logger.info('config', `运行日志：${path.join(app.dataDir(), 'logs')}`);
 
 if (options.open) {
   openBrowser(url);

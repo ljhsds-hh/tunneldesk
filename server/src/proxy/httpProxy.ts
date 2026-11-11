@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import type { ProxyLogEntry, ProxyRuntime, ProxySettings } from '../types.js';
 import { Logger } from '../util/logger.js';
 import { SshLink } from '../ssh/link.js';
+import { APP_VERSION } from '../version.js';
 
 const MAX_HEADER_BYTES = 64 * 1024;
 const HEADER_TIMEOUT_MS = 20000;
@@ -220,7 +221,7 @@ export class HttpProxyServer extends EventEmitter {
       return;
     }
     if (url.protocol !== 'http:') {
-      this.reject(client, 405, '首版仅支持 HTTP 与 CONNECT(HTTPS)');
+      this.reject(client, 405, '当前仅支持 HTTP 与 CONNECT(HTTPS)');
       return;
     }
 
@@ -286,8 +287,9 @@ export class HttpProxyServer extends EventEmitter {
       if (finished) return;
       finished = true;
       this.runtime.activeConnections = Math.max(0, this.runtime.activeConnections - 1);
-      this.runtime.bytesIn += bytesUp;
-      this.runtime.bytesOut += bytesDown;
+      // Same convention as port mappings: in = arriving at A (下行).
+      this.runtime.bytesIn += bytesDown;
+      this.runtime.bytesOut += bytesUp;
       this.record({
         method: meta.method,
         target: meta.target,
@@ -413,7 +415,7 @@ export class HttpProxyServer extends EventEmitter {
       }, 15000);
 
       channel.write(
-        `GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nUser-Agent: TunnelDesk/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n`,
+        `GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nUser-Agent: TunnelDesk/${APP_VERSION}\r\nAccept: */*\r\nConnection: close\r\n\r\n`,
       );
       channel.on('data', (chunk: Buffer) => {
         buffer += chunk.toString('latin1', 0, Math.min(chunk.length, 256));

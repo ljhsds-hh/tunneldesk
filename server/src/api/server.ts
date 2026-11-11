@@ -161,8 +161,8 @@ async function handleApi(app: App, req: http.IncomingMessage, res: http.ServerRe
       return;
     }
     if (method === 'DELETE' && !action) {
-      await app.removeHost(id);
-      sendJson(res, 200, { ok: true });
+      const result = await app.removeHost(id);
+      sendJson(res, 200, { ok: true, ...result });
       return;
     }
     if (method === 'POST' && action === 'activate') {
@@ -344,7 +344,7 @@ function openEventStream(app: App, req: http.IncomingMessage, res: http.ServerRe
 
   const send = () => {
     if (res.writableEnded) return;
-    res.write(`data: ${JSON.stringify(app.snapshot())}\n\n`);
+    res.write(`data: ${app.snapshotFrame()}\n\n`);
   };
   send();
   app.on('tick', send);

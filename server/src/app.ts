@@ -17,8 +17,14 @@ import { Logger } from './util/logger.js';
 import { appDataDir, keysDir, newId } from './util/paths.js';
 import { isPortFree, isValidHostname, isValidPort } from './util/net.js';
 import { SshLink } from './ssh/link.js';
+import { connectClient, execOnClient, powershell } from './ssh/client.js';
 import { provisionHost, verifyKeyLogin } from './ssh/provision.js';
-import { FirewallManager, firewallOwned, type FirewallDesiredPort } from './firewall/manager.js';
+import {
+  FirewallManager,
+  buildRuleRemovalScript,
+  firewallOwned,
+  type FirewallDesiredPort,
+} from './firewall/manager.js';
 import {
   clearGroupInConfig,
   normalizeGroupName,
@@ -32,6 +38,7 @@ import { BASTION_LOCAL_PORT } from './bastion/command.js';
 import { encryptPassword } from './bastion/dpapi.js';
 import { cleanRdpDir } from './bastion/rdp.js';
 import { validateBastionInput } from './bastion/validate.js';
+import { APP_VERSION } from './version.js';
 
 export interface SetupHostInput {
   name?: string;
@@ -85,7 +92,11 @@ export class AppError extends Error {
  * the aggregated runtime state consumed by the console UI.
  */
 export class App extends EventEmitter {
-  readonly logger = new Logger();
+  // File logging is disabled under Vitest so unit tests never touch the real
+  // %APPDATA%\TunnelDesk directory.
+  readonly logger = new Logger({
+    fileDir: process.env.VITEST ? undefined : path.join(appDataDir(), 'logs'),
+  });
   readonly store = new ConfigStore();
   readonly link: SshLink;
   readonly forward: ForwardManager;
@@ -101,6 +112,7 @@ export class App extends EventEmitter {
   private previousProxy = { bytesIn: 0, bytesOut: 0 };
   private rates = new Map<string, { rateIn: number; rateOut: number }>();
   private proxyRate = { rateIn: 0, rateOut: 0 };
+  private frameCache: { at: number; body: string } | null = null;
 
   constructor() {
     super();
@@ -177,6 +189,7 @@ export class App extends EventEmitter {
     await this.bastion.shutdown();
     await this.proxy.stop();
     await this.forward.stopAll();
+    this.logger.close();
   }
 
   snapshot(): AppSnapshot {
@@ -192,6 +205,7 @@ export class App extends EventEmitter {
     }));
     return {
       serverTime: new Date().toISOString(),
+      version: APP_VERSION,
       uptimeMs: Date.now() - this.startedAt,
       dataDir: appDataDir(),
       settings: config.settings,
@@ -214,9 +228,23 @@ export class App extends EventEmitter {
         lastError: this.firewall.lastError,
         removedOrphans: this.firewall.removedOrphans,
       },
-      proxyLogs: this.proxy.logs.slice(0, 60),
-      logs: this.logger.list().slice(-80),
+      // The streaming frame only needs enough history to paint the overview;
+      // the full buffer is served on demand by GET /api/logs.
+      proxyLogs: this.proxy.logs.slice(0, 50),
+      logs: this.logger.list().slice(-30),
     };
+  }
+
+  /**
+   * Serialized snapshot shared by every SSE client for a short window.
+   * Without this, each open tab re-serializes the same structure every second.
+   */
+  snapshotFrame(): string {
+    const now = Date.now();
+    if (this.frameCache && now - this.frameCache.at < 250) return this.frameCache.body;
+    const body = JSON.stringify(this.snapshot());
+    this.frameCache = { at: now, body };
+    return body;
   }
 
   getConfig(): AppConfig {
@@ -313,6 +341,7 @@ export class App extends EventEmitter {
     await this.store.update((draft) => {
       draft.activeHostId = id;
     });
+    this.logger.info('host', `已切换到主机 ${host.name}（${host.username}@${host.host}:${host.port}）`);
     await this.prepareBastion(host);
     this.link.setAutoReconnect(this.store.get().settings.reconnect);
     await this.link.connect(host).catch(() => undefined);
@@ -384,26 +413,91 @@ export class App extends EventEmitter {
     });
   }
 
-  async removeHost(id: string): Promise<void> {
+  /**
+   * Removes a host together with its mappings, and - the part that used to be
+   * silently skipped - the firewall rules those mappings own on that host.
+   * For a non-active host the rules are cleaned through a short-lived SSH
+   * connection, otherwise they would survive forever: reconciliation only ever
+   * runs against the active host.
+   */
+  async removeHost(
+    id: string,
+  ): Promise<{ mappingsRemoved: number; rulesCleaned: number; cleanupNote: string | null }> {
     const config = this.store.get();
+    const host = this.store.getHost(id);
+    if (!host) throw new AppError('主机不存在', 404);
     const isActive = config.activeHostId === id;
     const ownedMappings = config.mappings.filter((mapping) => mapping.hostId === id);
-    if (isActive) {
-      if (this.link.isOnline()) {
-        for (const mapping of ownedMappings) {
-          await this.firewall.removeMapping(mapping.id).catch(() => undefined);
+    const ruleIds = config.mappings
+      .filter((mapping) => mapping.hostId === id && firewallOwned(mapping))
+      .map((mapping) => mapping.id);
+
+    let rulesCleaned = 0;
+    let cleanupNote: string | null = null;
+    if (ruleIds.length > 0) {
+      try {
+        rulesCleaned = await this.purgeRules(host, ruleIds, isActive);
+        if (rulesCleaned > 0) {
+          this.logger.info('firewall', `删除主机 ${host.name} 前已清理 ${rulesCleaned} 条规则`);
         }
+      } catch (error) {
+        cleanupNote = `有 ${ruleIds.length} 条 B 侧防火墙规则未能清理：${(error as Error).message}`;
+        this.logger.warn('firewall', cleanupNote);
       }
-      this.link.disconnect();
     }
+
+    if (isActive) this.link.disconnect();
     await this.store.update((draft) => {
-      draft.hosts = draft.hosts.filter((host) => host.id !== id);
+      draft.hosts = draft.hosts.filter((item) => item.id !== id);
       draft.mappings = draft.mappings.filter((mapping) => mapping.hostId !== id);
       if (draft.activeHostId === id) draft.activeHostId = draft.hosts[0]?.id ?? null;
     });
     this.firewall.reset();
     await this.forward.sync(this.store.get().mappings);
+    this.logger.info(
+      'host',
+      `已删除主机 ${host.name}${ownedMappings.length > 0 ? `，同时删除 ${ownedMappings.length} 条映射` : ''}`,
+    );
     this.emit('change');
+    return { mappingsRemoved: ownedMappings.length, rulesCleaned, cleanupNote };
+  }
+
+  /**
+   * Removes the named rules from `host`. Uses the live link when the host is
+   * the active one, otherwise opens a temporary connection with the stored key.
+   * Never touches rules outside the `TunnelDesk-` namespace.
+   */
+  private async purgeRules(host: HostConfig, mappingIds: string[], isActive: boolean): Promise<number> {
+    if (mappingIds.length === 0) return 0;
+    const script = `${buildRuleRemovalScript(mappingIds)}; Write-Output 'PURGED'`;
+    if (isActive && this.link.isOnline()) {
+      await this.link.exec(powershell(script), 15000);
+      return mappingIds.length;
+    }
+
+    let privateKey: string;
+    try {
+      privateKey = await fs.promises.readFile(host.keyPath, 'utf8');
+    } catch {
+      throw new Error('找不到该主机的私钥文件');
+    }
+    const { client } = await connectClient({
+      host: host.host,
+      port: host.port,
+      username: host.username,
+      privateKeyPem: privateKey,
+      readyTimeoutMs: 8000,
+    });
+    try {
+      await execOnClient(client, powershell(script), 10000);
+      return mappingIds.length;
+    } finally {
+      try {
+        client.end();
+      } catch {
+        client.destroy();
+      }
+    }
   }
 
   async connect(): Promise<void> {
@@ -602,15 +696,22 @@ export class App extends EventEmitter {
       draft.mappingGroupOrder = normalizeGroupOrder(draft.mappingGroupOrder, draft.mappings);
     });
     await this.forward.sync(this.store.get().mappings);
-    await this.syncFirewall().catch(() => undefined);
+    this.scheduleFirewallSync();
+    this.logger.info(
+      'mapping',
+      `已创建映射「${mapping.name}」：${bindAddress}:${localPort} → ${targetHost}:${targetPort}${mapping.enabled ? '' : '（未启用）'}`,
+    );
     this.emit('change');
     return mapping;
   }
 
   async updateMapping(id: string, input: Partial<MappingInput>): Promise<MappingConfig> {
     const config = this.store.get();
-    const existing = config.mappings.find((mapping) => mapping.id === id);
-    if (!existing) throw new AppError('映射不存在', 404);
+    const current = config.mappings.find((mapping) => mapping.id === id);
+    if (!current) throw new AppError('映射不存在', 404);
+    // ConfigStore mutates the live config object, so the audit diff needs a
+    // copy taken before the update - otherwise both sides are the same object.
+    const existing: MappingConfig = { ...current };
 
     const localPort =
       input.localPort !== undefined ? clampPort(input.localPort, existing.localPort) : existing.localPort;
@@ -651,9 +752,16 @@ export class App extends EventEmitter {
     });
 
     await this.forward.sync(this.store.get().mappings);
-    await this.syncFirewall().catch(() => undefined);
+    // Reconciliation runs behind the API response: a name or group edit must
+    // not wait for two PowerShell round trips on the B side.
+    this.scheduleFirewallSync();
+    const updated = this.store.get().mappings.find((mapping) => mapping.id === id) as MappingConfig;
+    const changes = describeMappingChanges(existing, updated);
+    if (changes.length > 0) {
+      this.logger.info('mapping', `已更新映射「${updated.name}」：${changes.join('；')}`);
+    }
     this.emit('change');
-    return this.store.get().mappings.find((mapping) => mapping.id === id) as MappingConfig;
+    return updated;
   }
 
   /**
@@ -681,6 +789,7 @@ export class App extends EventEmitter {
       renamed = renameGroupInConfig(draft, fromName, toName);
       draft.mappingGroupOrder = normalizeGroupOrder(draft.mappingGroupOrder, draft.mappings);
     });
+    this.logger.info('mapping', `分组「${fromName}」已重命名为「${toName}」，${renamed} 条映射随之移动`);
     this.emit('change');
     return { renamed, name: toName };
   }
@@ -696,6 +805,7 @@ export class App extends EventEmitter {
     await this.store.update((draft) => {
       moved = clearGroupInConfig(draft, target);
     });
+    this.logger.info('mapping', `已删除分组「${target}」，${moved} 条映射移至「未分组」`);
     this.emit('change');
     return { moved };
   }
@@ -707,6 +817,7 @@ export class App extends EventEmitter {
       next = normalizeGroupOrder(order, draft.mappings);
       draft.mappingGroupOrder = next;
     });
+    this.logger.info('mapping', `分组顺序已更新：${next.length > 0 ? next.join(' → ') : '（空）'}`);
     this.emit('change');
     return { order: next };
   }
@@ -719,11 +830,19 @@ export class App extends EventEmitter {
       draft.mappingGroupOrder = normalizeGroupOrder(draft.mappingGroupOrder, draft.mappings);
     });
     await this.forward.sync(this.store.get().mappings);
-    if (this.link.isOnline()) {
+    const cleanedNow = this.link.isOnline();
+    if (cleanedNow) {
+      // Targeted removal: this already deletes exactly the two rules for this
+      // mapping and refreshes the list, so a full reconcile would only add a
+      // second round trip.
       await this.enqueueFirewall(() => this.firewall.removeMapping(id)).catch(() => undefined);
     }
-    await this.syncFirewall().catch(() => undefined);
-    this.logger.info('mapping', `已删除映射 ${mapping.name}，并清理 B 侧防火墙规则`);
+    this.logger.info(
+      'mapping',
+      cleanedNow
+        ? `已删除映射「${mapping.name}」并清理 B 侧规则`
+        : `已删除映射「${mapping.name}」（隧道离线，B 侧规则将在下次连接时清理）`,
+    );
     this.emit('change');
   }
 
@@ -740,11 +859,14 @@ export class App extends EventEmitter {
 
   async updateProxy(input: Partial<ProxySettings>): Promise<ProxySettings> {
     const config = this.store.get();
-    const next = sanitizeProxy(input, config.proxy);
+    const before = config.proxy;
+    const next = sanitizeProxy(input, before);
     await this.store.update((draft) => {
       draft.proxy = next;
     });
     await this.proxy.apply(next);
+    const changes = describeProxyChanges(before, next);
+    if (changes.length > 0) this.logger.info('proxy', `代理设置已更新：${changes.join('；')}`);
     this.emit('change');
     return next;
   }
@@ -759,6 +881,17 @@ export class App extends EventEmitter {
     const next = this.firewallChain.then(fn, fn);
     this.firewallChain = next.catch(() => undefined);
     return next;
+  }
+
+  /**
+   * Fire-and-forget reconciliation for config mutations. Firewall failures are
+   * surfaced in the log and in `snapshot().firewall.lastError`, not as an error
+   * on an operation that already succeeded locally.
+   */
+  private scheduleFirewallSync(): void {
+    void this.syncFirewall().catch((error: Error) => {
+      this.logger.warn('firewall', `规则同步失败：${error.message}`);
+    });
   }
 
   syncFirewall(): Promise<{ added: number; removed: number }> {
@@ -778,10 +911,17 @@ export class App extends EventEmitter {
   }
 
   async updateSettings(input: Partial<AppConfig['settings']>): Promise<AppConfig['settings']> {
+    const before = this.store.get().settings;
     await this.store.update((draft) => {
       draft.settings = { ...draft.settings, ...input };
     });
     const settings = this.store.get().settings;
+    if (before.reconnect !== settings.reconnect) {
+      this.logger.info('settings', settings.reconnect ? '自动重连已启用' : '自动重连已关闭');
+    }
+    if (before.theme !== settings.theme) {
+      this.logger.info('settings', `主题已切换为${settings.theme === 'light' ? '浅色' : '深色'}`);
+    }
     const host = this.store.getActiveHost();
     const tunnelDown = host?.connectionType === 'azure-bastion' && !this.bastion.isReady();
     this.link.setAutoReconnect(tunnelDown ? false : settings.reconnect);
@@ -843,6 +983,47 @@ export class App extends EventEmitter {
   resolveWebDist(): string | null {
     return findWebDist();
   }
+}
+
+/**
+ * Human-readable diff used for the audit log. Order follows the UI so the log
+ * line reads like the change the user made.
+ */
+export function describeMappingChanges(before: MappingConfig, after: MappingConfig): string[] {
+  const changes: string[] = [];
+  if (before.name !== after.name) changes.push(`名称「${before.name}」→「${after.name}」`);
+  if (before.enabled !== after.enabled) changes.push(after.enabled ? '已启用监听' : '已停用监听');
+  if (before.syncFirewall !== after.syncFirewall) {
+    changes.push(after.syncFirewall ? '开启防火墙同步' : '关闭防火墙同步');
+  }
+  if (before.bindAddress !== after.bindAddress || before.localPort !== after.localPort) {
+    changes.push(
+      `本地监听 ${before.bindAddress}:${before.localPort} → ${after.bindAddress}:${after.localPort}`,
+    );
+  }
+  if (before.targetHost !== after.targetHost || before.targetPort !== after.targetPort) {
+    changes.push(`B 侧目标 ${before.targetHost}:${before.targetPort} → ${after.targetHost}:${after.targetPort}`);
+  }
+  if ((before.group ?? '') !== (after.group ?? '')) {
+    changes.push(`分组「${before.group || '未分组'}」→「${after.group || '未分组'}」`);
+  }
+  return changes;
+}
+
+export function describeProxyChanges(before: ProxySettings, after: ProxySettings): string[] {
+  const changes: string[] = [];
+  if (before.enabled !== after.enabled) changes.push(after.enabled ? '已启用' : '已停止');
+  if (before.port !== after.port) changes.push(`端口 ${before.port} → ${after.port}`);
+  if (before.bindAddress !== after.bindAddress) changes.push(`绑定地址 → ${after.bindAddress}`);
+  if (before.allowLan !== after.allowLan) changes.push(after.allowLan ? '允许局域网访问' : '仅本机访问');
+  if (before.routingMode !== after.routingMode) {
+    changes.push(`分流模式 → ${after.routingMode === 'whitelist' ? '仅白名单' : '全部走代理'}`);
+  }
+  if (before.whitelist.join(',') !== after.whitelist.join(',')) {
+    changes.push(`白名单 ${after.whitelist.length} 项`);
+  }
+  if (before.logLimit !== after.logLimit) changes.push(`日志上限 ${before.logLimit} → ${after.logLimit}`);
+  return changes;
 }
 
 function findWebDist(): string | null {

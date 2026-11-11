@@ -336,8 +336,12 @@ async function main() {
 
   // ---- F1: firewall rules by target ownership
   const thirdId = await createMapping('phase2-third-party', 18086, '10.20.30.40', P.target);
+  const httpRuleCreated = await waitFor(async () => {
+    const current = (await api('/api/state')).firewall.rules.map((rule) => rule.name);
+    return current.includes(`TunnelDesk-${httpId}`);
+  }, 10000, 'B-local rule created');
+  check('B-local mapping has TunnelDesk rule', httpRuleCreated);
   const rules = (await api('/api/state')).firewall.rules.map((rule) => rule.name);
-  check('B-local mapping has TunnelDesk rule', rules.includes(`TunnelDesk-${httpId}`), rules.join(','));
   check('third-party mapping has no B-side rule', !rules.includes(`TunnelDesk-${thirdId}`), rules.join(','));
 
   // ---- Disabling a mapping stops the local listener but keeps its B-side rule.
@@ -374,18 +378,22 @@ async function main() {
   check('rule restored when target returns to B-local', restored);
 
   // ---- ::1 passes validation and is treated as B itself
+  // Reconciliation is intentionally fire-and-forget now, so poll for the
+  // rule instead of assuming it exists the moment the API returns.
   const loopback6Id = await createMapping('phase2-ipv6-loopback', 18087, '::1', P.target);
-  const v6Rules = (await api('/api/state')).firewall.rules.map((rule) => rule.name);
-  check('::1 target creates a B-side rule', v6Rules.includes(`TunnelDesk-${loopback6Id}`), v6Rules.join(','));
+  const v6Created = await waitFor(async () => {
+    const current = (await api('/api/state')).firewall.rules.map((rule) => rule.name);
+    return current.includes(`TunnelDesk-${loopback6Id}`);
+  }, 10000, '::1 rule created');
+  check('::1 target creates a B-side rule', v6Created);
 
   // ---- casing and padding are normalised before the ownership test
   const upperId = await createMapping('phase2-case', 18088, '  LOCALHOST  ', P.target);
-  const caseRules = (await api('/api/state')).firewall.rules.map((rule) => rule.name);
-  check(
-    'LOCALHOST with padding is normalised to B-local',
-    caseRules.includes(`TunnelDesk-${upperId}`),
-    caseRules.join(','),
-  );
+  const caseCreated = await waitFor(async () => {
+    const current = (await api('/api/state')).firewall.rules.map((rule) => rule.name);
+    return current.includes(`TunnelDesk-${upperId}`);
+  }, 10000, 'LOCALHOST rule created');
+  check('LOCALHOST with padding is normalised to B-local', caseCreated);
 
   // ---- deleting a third-party mapping must not fail on the missing rule
   let deleteOk = true;

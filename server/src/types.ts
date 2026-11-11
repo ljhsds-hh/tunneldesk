@@ -131,6 +131,10 @@ export interface AppConfig {
   };
 }
 
+/**
+ * Traffic counters are measured from A's point of view:
+ * `bytesIn` / `rateIn` = arriving at A (下行), `bytesOut` / `rateOut` = sent by A (上行).
+ */
 export interface MappingRuntime {
   listening: boolean;
   activeConnections: number;
@@ -142,6 +146,7 @@ export interface MappingRuntime {
   lastError: string | null;
 }
 
+/** Same counter convention as MappingRuntime: in = 下行, out = 上行. */
 export interface ProxyRuntime {
   running: boolean;
   error: string | null;
@@ -186,6 +191,8 @@ export interface LogEntry {
 
 export interface AppSnapshot {
   serverTime: string;
+  /** Server version, read from the repository root package.json. */
+  version: string;
   uptimeMs: number;
   dataDir: string;
   settings: {

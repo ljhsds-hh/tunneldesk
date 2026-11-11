@@ -23,6 +23,18 @@ function emptyRuntime(): MappingRuntime {
   };
 }
 
+/** Turns raw errno text into something a user can act on. */
+function describeListenError(mapping: MappingConfig, error: NodeJS.ErrnoException): string {
+  if (error.code === 'EADDRINUSE') return `本地端口 ${mapping.localPort} 已被占用`;
+  if (error.code === 'EACCES') {
+    return `没有权限监听 ${mapping.bindAddress}:${mapping.localPort}（1024 以下端口需要管理员权限）`;
+  }
+  if (error.code === 'EADDRNOTAVAIL') {
+    return `本机不存在地址 ${mapping.bindAddress}，请检查绑定地址`;
+  }
+  return error.message;
+}
+
 /**
  * Owns local listeners for the "port mapping" business.
  * Listeners stay bound while the tunnel is down so clients get an immediate
@@ -96,35 +108,36 @@ export class ForwardManager extends EventEmitter {
 
   private async openEntry(mapping: MappingConfig): Promise<ServerEntry | null> {
     const runtime = this.runtimeFor(mapping.id);
+    // Cleared first so a synchronous listen() failure cannot surface a stale message.
+    runtime.lastError = null;
     const sockets = new Set<net.Socket>();
     const server = net.createServer((socket) => this.handleConnection(mapping, runtime, sockets, socket));
+    const entry: ServerEntry = { mapping, server, sockets };
+
+    // A single error listener serves both phases: rejecting the initial listen
+    // attempt, and reporting a listener that dies later. Splitting them caused
+    // duplicated log lines and let the raw errno text overwrite the friendly one.
+    let pendingReject: ((error: Error) => void) | null = null;
     server.on('error', (error: NodeJS.ErrnoException) => {
       runtime.listening = false;
-      runtime.lastError =
-        error.code === 'EADDRINUSE'
-          ? `本地端口 ${mapping.localPort} 已被占用`
-          : error.message;
-      this.logger.error(
-        'forward',
-        `监听 ${mapping.bindAddress}:${mapping.localPort} 失败：${runtime.lastError}`,
-      );
+      runtime.lastError = describeListenError(mapping, error);
+      if (pendingReject) {
+        const reject = pendingReject;
+        pendingReject = null;
+        reject(error);
+        return;
+      }
+      this.logger.error('forward', `映射 ${mapping.name} 监听中断：${runtime.lastError}`);
       this.emit('change');
     });
 
-    const entry: ServerEntry = { mapping, server, sockets };
-
     try {
       await new Promise<void>((resolve, reject) => {
-        const onError = (error: Error) => {
-          server.removeListener('listening', onListening);
-          reject(error);
-        };
-        const onListening = () => {
-          server.removeListener('error', onError);
+        pendingReject = reject;
+        server.once('listening', () => {
+          pendingReject = null;
           resolve();
-        };
-        server.once('error', onError);
-        server.once('listening', onListening);
+        });
         server.listen({ host: mapping.bindAddress, port: mapping.localPort, exclusive: true });
       });
       runtime.listening = true;
@@ -136,7 +149,13 @@ export class ForwardManager extends EventEmitter {
       return entry;
     } catch (error) {
       runtime.listening = false;
-      runtime.lastError = (error as Error).message;
+      // describeListenError() normally filled this in; a synchronous listen()
+      // failure has no error event, so fall back to the thrown message.
+      const detail = runtime.lastError ?? (error as Error).message;
+      runtime.lastError = detail;
+      this.logger.error('forward', `监听 ${mapping.bindAddress}:${mapping.localPort} 失败：${detail}`);
+      server.removeAllListeners('error');
+      server.on('error', () => undefined);
       server.close();
       return null;
     }
@@ -173,11 +192,13 @@ export class ForwardManager extends EventEmitter {
     this.link
       .openStream(mapping.targetHost, mapping.targetPort)
       .then((channel) => {
+        // Accounting is from A's point of view, matching the UI labels:
+        // bytesIn / rateIn = traffic arriving at A (下行), bytesOut = 上行.
         socket.on('data', (chunk: Buffer) => {
-          runtime.bytesIn += chunk.length;
+          runtime.bytesOut += chunk.length;
         });
         channel.on('data', (chunk: Buffer) => {
-          runtime.bytesOut += chunk.length;
+          runtime.bytesIn += chunk.length;
         });
         socket.pipe(channel);
         channel.pipe(socket);
