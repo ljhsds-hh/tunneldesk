@@ -4,6 +4,7 @@ import type { AppSnapshot } from './types';
 import {
   IconClose,
   IconGlobe,
+  IconList,
   IconMoon,
   IconOverview,
   IconPorts,
@@ -14,12 +15,13 @@ import {
 import { StatusPill } from './ui';
 import { OverviewPage } from './pages/Overview';
 import { MappingsPage } from './pages/Mappings';
+import { QuickListPage } from './pages/QuickList';
 import { ProxyPage } from './pages/Proxy';
 import { ConnectionPage } from './pages/Connection';
 import { SettingsPage } from './pages/Settings';
 import { APP_VERSION } from './version';
 
-export type Route = 'overview' | 'mappings' | 'proxy' | 'connection' | 'settings';
+export type Route = 'overview' | 'mappings' | 'quick' | 'proxy' | 'connection' | 'settings';
 
 export interface Series {
   down: number[];
@@ -54,6 +56,7 @@ export function useApp(): AppContextValue {
 const NAV: Array<{ key: Route; label: string; icon: JSX.Element; hint: string }> = [
   { key: 'overview', label: '概览', icon: <IconOverview />, hint: '整体运行状态' },
   { key: 'mappings', label: '端口映射', icon: <IconPorts />, hint: 'A 本地端口 → B' },
+  { key: 'quick', label: '映射一览', icon: <IconList />, hint: '按分组快速复制访问地址' },
   { key: 'proxy', label: '内网代理', icon: <IconGlobe />, hint: '经 B 访问内网 HTTP' },
   { key: 'connection', label: '连接管理', icon: <IconServer />, hint: '主机、密钥与防火墙' },
   { key: 'settings', label: '设置', icon: <IconSettings />, hint: '偏好与数据' },
@@ -170,13 +173,15 @@ export default function App() {
   const Page =
     route === 'mappings'
       ? MappingsPage
-      : route === 'proxy'
-        ? ProxyPage
-        : route === 'connection'
-          ? ConnectionPage
-          : route === 'settings'
-            ? SettingsPage
-            : OverviewPage;
+      : route === 'quick'
+        ? QuickListPage
+        : route === 'proxy'
+          ? ProxyPage
+          : route === 'connection'
+            ? ConnectionPage
+            : route === 'settings'
+              ? SettingsPage
+              : OverviewPage;
 
   const activeCount = snap?.mappings.filter((mapping) => mapping.enabled).length ?? 0;
 

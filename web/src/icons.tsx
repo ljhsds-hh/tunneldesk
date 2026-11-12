@@ -104,6 +104,13 @@ export const IconCheck = (props: Props) => (
   </SVG>
 );
 
+export const IconList = (props: Props) => (
+  <SVG {...props}>
+    <path d="M8 6h13M8 12h13M8 18h13" />
+    <path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01" strokeWidth={2.6} />
+  </SVG>
+);
+
 export const IconClose = (props: Props) => (
   <SVG {...props}>
     <path d="M18 6 6 18M6 6l12 12" />

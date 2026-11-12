@@ -26,6 +26,14 @@ import {
   Toggle,
 } from '../ui';
 import { useApp } from '../App';
+import {
+  buildGroupSections,
+  groupLabel,
+  GROUP_NAME_MAX,
+  normalizeGroupName,
+  UNGROUPED_LABEL,
+  type GroupSection,
+} from '../grouping';
 import type { Mapping } from '../types';
 
 interface FormState {
@@ -36,11 +44,6 @@ interface FormState {
   targetPort: string;
   enabled: boolean;
   syncFirewall: boolean;
-}
-
-interface GroupSection {
-  name: string;
-  items: Mapping[];
 }
 
 const EMPTY_FORM: FormState = {
@@ -65,26 +68,9 @@ function isWildcardBind(address: string): boolean {
   return address === '0.0.0.0' || address === '::' || address === '';
 }
 
-/** 分组名最大长度，与 server/src/config/groups.ts 保持一致。 */
-const GROUP_NAME_MAX = 24;
+/** 分组名建议，仅供新建/编辑时的下拉提示使用。 */
 const GROUP_SUGGESTIONS = ['数据库', '远程桌面', 'Web', '文件共享', '其他'];
-const UNGROUPED_LABEL = '未分组';
 const COLLAPSED_KEY = 'tunneldesk.mappings.collapsed-groups';
-
-/** Mirrors server/src/config/groups.ts normalizeGroupName. */
-function normalizeGroupName(value: unknown): string {
-  if (typeof value !== 'string') return '';
-  const text = value
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!text || text === UNGROUPED_LABEL) return '';
-  return Array.from(text).slice(0, GROUP_NAME_MAX).join('').trim();
-}
-
-function groupLabel(name: string): string {
-  return name || UNGROUPED_LABEL;
-}
 
 function readCollapsed(): string[] {
   try {
@@ -136,30 +122,10 @@ export function MappingsPage() {
     );
   }, [mappings, needle]);
 
-  const groupSections = useMemo(() => {
-    const byName = new Map<string, Mapping[]>();
-    for (const mapping of mappings) {
-      const name = normalizeGroupName(mapping.group);
-      const bucket = byName.get(name);
-      if (bucket) bucket.push(mapping);
-      else byName.set(name, [mapping]);
-    }
-    const ordered: GroupSection[] = [];
-    const seen = new Set<string>();
-    for (const raw of snap?.mappingGroupOrder ?? []) {
-      const name = normalizeGroupName(raw);
-      const items = byName.get(name);
-      if (!name || !items || seen.has(name)) continue;
-      seen.add(name);
-      ordered.push({ name, items });
-    }
-    for (const [name, items] of byName) {
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
-      ordered.push({ name, items });
-    }
-    return { ordered, ungrouped: byName.get('') ?? [] };
-  }, [mappings, snap?.mappingGroupOrder]);
+  const groupSections = useMemo(
+    () => buildGroupSections(mappings, snap?.mappingGroupOrder),
+    [mappings, snap?.mappingGroupOrder],
+  );
 
   const hasGroups = groupSections.ordered.length > 0;
   const showUngrouped =

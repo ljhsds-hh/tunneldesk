@@ -258,7 +258,15 @@ export function Sparkline({
   );
 }
 
-export function CopyButton({ value, label = '复制' }: { value: string; label?: string }) {
+export function CopyButton({
+  value,
+  label = '复制',
+  ariaLabel,
+}: {
+  value: string;
+  label?: string;
+  ariaLabel?: string;
+}) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -270,6 +278,8 @@ export function CopyButton({ value, label = '复制' }: { value: string; label?:
     <button
       type="button"
       className={`copy${copied ? ' copy--done' : ''}`}
+      aria-label={ariaLabel}
+      title={ariaLabel}
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(value);
