@@ -2217,28 +2217,6 @@ code,
 
 /* -------------------------------------------------------------- quick list */
 
-.quick-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-.quick-note svg {
-  flex-shrink: 0;
-  color: var(--accent);
-}
-
-.quick-note code {
-  color: var(--text-2);
-  font-size: 11.5px;
-}
-
 .quick-groups {
   display: flex;
   flex-direction: column;
@@ -2263,6 +2241,7 @@ code,
 
 .quick-group__title {
   margin: 0;
+  min-width: 0;
   font-size: 13.5px;
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -2364,25 +2343,6 @@ code,
 
 .quick-row .copy {
   flex-shrink: 0;
-  height: 27px;
-}
-
-@media (max-width: 720px) {
-  .quick-row {
-    flex-wrap: wrap;
-    gap: 6px 10px;
-  }
-  .quick-row__name {
-    flex: 1 1 calc(100% - 20px);
-  }
-  .quick-row__addr {
-    flex: 1 1 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .quick-group__meta {
-    display: none;
-  }
 }
 
 /* ------------------------------------------------------------------ proxy */
@@ -3318,6 +3278,21 @@ code,
   }
   .mapping-group__rename .input {
     max-width: none;
+  }
+  .quick-row {
+    flex-wrap: wrap;
+    gap: 6px 10px;
+  }
+  .quick-row__name {
+    flex: 1 1 calc(100% - 20px);
+  }
+  .quick-row__addr {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .quick-group__meta {
+    display: none;
   }
   .toolbar__meta {
     flex-wrap: wrap;

@@ -26,6 +26,7 @@ import {
   Toggle,
 } from '../ui';
 import { useApp } from '../App';
+import { displayEndpoint } from '../endpoint';
 import {
   buildGroupSections,
   groupLabel,
@@ -446,9 +447,7 @@ export function MappingsPage() {
             <span className="route-node__label">
               {isWildcardBind(mapping.bindAddress) ? 'A 任意网卡' : 'A 本机'}
             </span>
-            <code>
-              {mapping.bindAddress}:{mapping.localPort}
-            </code>
+            <code>{displayEndpoint(mapping)}</code>
           </div>
           <span className="route-arrow">
             <IconArrow size={16} />
@@ -529,7 +528,7 @@ export function MappingsPage() {
 
     return (
       <section
-        key={group.name || '__ungrouped'}
+        key={group.name ? `group:${group.name}` : 'ungrouped'}
         className={className}
         aria-label={groupLabel(group.name)}
         onDragOver={handleSectionDragOver(group.name)}

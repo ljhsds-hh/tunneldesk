@@ -17,9 +17,10 @@ function rowStateLabel(mapping: Mapping): string {
   return mapping.runtime.lastError ?? '等待隧道';
 }
 
-function QuickRow({ mapping }: { mapping: Mapping }) {
+function QuickRow({ mapping, onCopyError }: { mapping: Mapping; onCopyError: () => void }) {
   const tone = rowTone(mapping);
   const state = rowStateLabel(mapping);
+  const shown = displayEndpoint(mapping);
   const copyValue = copyEndpoint(mapping);
 
   return (
@@ -33,19 +34,20 @@ function QuickRow({ mapping }: { mapping: Mapping }) {
       <span className="quick-row__name" title={mapping.name}>
         {mapping.name}
       </span>
-      <code className="quick-row__addr" title={displayEndpoint(mapping)}>
-        {displayEndpoint(mapping)}
+      <code className="quick-row__addr" title={shown}>
+        {shown}
       </code>
       <CopyButton
         value={copyValue}
         ariaLabel={`复制「${mapping.name}」的访问地址 ${copyValue}`}
+        onError={onCopyError}
       />
     </li>
   );
 }
 
 export function QuickListPage() {
-  const { snap, navigate } = useApp();
+  const { snap, navigate, toast } = useApp();
   const mappings = snap?.mappings ?? [];
   const grouped = useMemo(
     () => buildGroupSections(mappings, snap?.mappingGroupOrder),
@@ -65,6 +67,7 @@ export function QuickListPage() {
     ...grouped.ordered,
     ...(grouped.ungrouped.length > 0 ? [{ name: '', items: grouped.ungrouped }] : []),
   ];
+  const onCopyError = () => toast('复制失败，请手动选中地址复制', 'error');
 
   return (
     <>
@@ -79,11 +82,11 @@ export function QuickListPage() {
         }
       />
 
-      <div className="quick-note">
+      <div className="callout">
         <IconCopy size={14} />
         <span>
-          地址列显示真实绑定地址；本地绑定（含 <code>0.0.0.0</code>）复制时会统一成{' '}
-          <code>127.0.0.1:端口</code>。
+          地址列显示真实绑定地址；本地回环/通配绑定复制时会统一成 <code>127.0.0.1:端口</code>，
+          IPv6 回环 <code>::1</code> 保留原地址。
         </span>
       </div>
 
@@ -108,7 +111,11 @@ export function QuickListPage() {
             ).length;
             const headingId = `quick-group-${index}`;
             return (
-              <section key={group.name || '__ungrouped'} className="quick-group" aria-labelledby={headingId}>
+              <section
+                key={group.name ? `group:${group.name}` : 'ungrouped'}
+                className="quick-group"
+                aria-labelledby={headingId}
+              >
                 <header className="quick-group__head">
                   <h2 className="quick-group__title" id={headingId}>
                     {groupLabel(group.name)}
@@ -120,7 +127,7 @@ export function QuickListPage() {
                 </header>
                 <ul className="quick-list">
                   {group.items.map((mapping) => (
-                    <QuickRow key={mapping.id} mapping={mapping} />
+                    <QuickRow key={mapping.id} mapping={mapping} onCopyError={onCopyError} />
                   ))}
                 </ul>
               </section>

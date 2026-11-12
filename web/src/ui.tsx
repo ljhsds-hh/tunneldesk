@@ -6,6 +6,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from 'react';
+import { copyText } from './clipboard';
 import { IconCheck, IconClose, IconCopy } from './icons';
 import type { LinkState } from './types';
 
@@ -262,10 +263,12 @@ export function CopyButton({
   value,
   label = '复制',
   ariaLabel,
+  onError,
 }: {
   value: string;
   label?: string;
   ariaLabel?: string;
+  onError?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -274,23 +277,22 @@ export function CopyButton({
     return () => clearTimeout(timer);
   }, [copied]);
 
+  const accessibleLabel = copied ? `已复制 ${value}` : ariaLabel;
+
   return (
     <button
       type="button"
       className={`copy${copied ? ' copy--done' : ''}`}
-      aria-label={ariaLabel}
-      title={ariaLabel}
+      aria-label={accessibleLabel}
+      title={accessibleLabel}
       onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-        } catch {
-          setCopied(false);
-        }
+        const ok = await copyText(value);
+        setCopied(ok);
+        if (!ok) onError?.();
       }}
     >
       {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-      {copied ? '已复制' : label}
+      <span aria-live="polite">{copied ? '已复制' : label}</span>
     </button>
   );
 }
