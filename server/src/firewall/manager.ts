@@ -4,6 +4,7 @@ import { SshLink } from '../ssh/link.js';
 import { cleanPowerShellError, isPrivilegeError, powershell } from '../ssh/client.js';
 import type { FirewallRuleInfo } from '../types.js';
 import { isBLocalTarget } from '../util/net.js';
+import { clampText, summarizeError, toSingleLine } from '../util/text.js';
 
 export const RULE_GROUP = 'TunnelDesk';
 export const RULE_PREFIX = 'TunnelDesk-';
@@ -189,10 +190,10 @@ export class FirewallManager {
     try {
       const result = await this.link.exec(powershell(script), 15000);
       if (result.code !== 0) {
-        this.lastError = cleanPowerShellError(result.stderr || result.stdout).slice(0, 300);
+        this.lastError = summarizeError(cleanPowerShellError(result.stderr || result.stdout));
       }
     } catch (error) {
-      this.lastError = (error as Error).message;
+      this.lastError = summarizeError(error);
     }
     await this.refresh().catch(() => undefined);
   }
@@ -227,7 +228,7 @@ export class FirewallManager {
         removed = orphanNames.length;
         this.logger.info('firewall', `清理孤儿规则 ${removed} 条`);
       } catch (error) {
-        this.lastError = (error as Error).message;
+        this.lastError = summarizeError(error);
       }
     }
 
@@ -252,10 +253,18 @@ export class FirewallManager {
           this.logger.info('firewall', `已放行 ${outcome.ok} 条 B 端口规则`);
         }
         if (outcome.failed > 0) {
-          this.lastError = outcome.errors.join('; ').slice(0, 400);
+          // Privilege detection must inspect every failure, not just the one
+          // kept for display, otherwise a denial hidden behind a generic error
+          // would be misreported as "elevated".
+          const allErrors = outcome.errors.join('\n');
+          // Keep one representative PowerShell error plus a count. Joining every
+          // failure produced multi-line CLIXML dumps in the log and the UI.
+          const firstError = toSingleLine(outcome.errors[0] ?? '规则下发失败');
+          const extra = outcome.failed > 1 ? `（另有 ${outcome.failed - 1} 条失败）` : '';
+          this.lastError = `${clampText(firstError, Math.max(1, 300 - extra.length))}${extra}`;
           // A permission error must win over the "at least one succeeded" signal,
           // otherwise the UI would suggest the session has admin rights.
-          if (/access is denied|拒绝访问|requires elevation/i.test(this.lastError)) {
+          if (/access is denied|拒绝访问|requires elevation/i.test(allErrors)) {
             this.privilege = 'denied';
           }
           this.logger.warn(
@@ -264,7 +273,7 @@ export class FirewallManager {
           );
         }
       } catch (error) {
-        this.lastError = (error as Error).message;
+        this.lastError = summarizeError(error);
         this.logger.warn('firewall', `规则批量下发失败：${this.lastError}`);
       }
     }
@@ -309,7 +318,7 @@ export class FirewallManager {
     if (result.code !== 0) {
       const message = cleanPowerShellError(result.stderr || result.stdout);
       if (isPrivilegeError(result)) this.privilege = 'denied';
-      this.lastError = (message || `读取 B 的防火墙规则失败（退出码 ${result.code}）`).slice(0, 400);
+      this.lastError = clampText(toSingleLine(message) || `读取 B 的防火墙规则失败（退出码 ${result.code}）`, 300);
       return this.rules;
     }
     const parsed: FirewallRuleInfo[] = [];
@@ -339,7 +348,7 @@ export class FirewallManager {
       return;
     }
     await this.list().catch((error: Error) => {
-      this.lastError = error.message;
+      this.lastError = summarizeError(error);
     });
   }
 
@@ -352,9 +361,12 @@ export class FirewallManager {
   }
 
   private handleFailure(raw: string, mapping: MappingConfig): void {
-    const message = (cleanPowerShellError(raw) || '防火墙命令返回了空错误信息').slice(0, 400);
+    // Detect privilege problems on the full text before it is truncated: the
+    // "Access is denied" line may sit at the end of a long PS error dump.
+    const cleaned = cleanPowerShellError(raw);
+    const message = clampText(toSingleLine(cleaned) || '防火墙命令返回了空错误信息', 300);
     this.lastError = message;
-    if (/access is denied|拒绝访问/i.test(message)) {
+    if (/access is denied|拒绝访问/i.test(cleaned)) {
       this.privilege = 'denied';
       this.logger.warn(
         'firewall',

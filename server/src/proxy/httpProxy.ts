@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import type { ProxyLogEntry, ProxyRuntime, ProxySettings } from '../types.js';
 import { Logger } from '../util/logger.js';
 import { SshLink } from '../ssh/link.js';
+import { clampText, summarizeError, toSingleLine } from '../util/text.js';
 import { APP_VERSION } from '../version.js';
 
 const MAX_HEADER_BYTES = 64 * 1024;
@@ -95,7 +96,7 @@ export class HttpProxyServer extends EventEmitter {
       this.runtime.error =
         (error as NodeJS.ErrnoException).code === 'EADDRINUSE'
           ? `代理端口 ${port} 已被占用`
-          : error.message;
+          : clampText(toSingleLine(error.message), 200);
       this.logger.error('proxy', `HTTP 代理启动失败：${this.runtime.error}`);
       this.emit('change');
     });
@@ -119,7 +120,9 @@ export class HttpProxyServer extends EventEmitter {
       this.logger.info('proxy', `HTTP 代理已启动 ${bindAddress}:${port}`);
       this.emit('change');
     } catch (error) {
-      this.runtime.error = (error as Error).message;
+      // The persistent 'error' listener above already sets a friendly message
+      // for EADDRINUSE; keep it instead of overwriting it with the raw errno.
+      this.runtime.error ??= clampText(toSingleLine((error as Error).message), 200);
       server.close();
     }
   }
@@ -333,10 +336,15 @@ export class HttpProxyServer extends EventEmitter {
   }
 
   private record(entry: Omit<ProxyLogEntry, 'id' | 'at'>): void {
+    // Request lines and tunnel errors come from untrusted traffic; bound them
+    // so the in-memory list (and therefore every SSE frame) stays small.
     const record: ProxyLogEntry = {
       id: ++this.logSeq,
       at: new Date().toISOString(),
       ...entry,
+      method: clampText(toSingleLine(entry.method), 16),
+      target: clampText(toSingleLine(entry.target), 200),
+      error: entry.error ? clampText(toSingleLine(entry.error), 200) : undefined,
     };
     this.logs.unshift(record);
     const limit = Math.max(20, this.settings.logLimit);
@@ -362,7 +370,7 @@ export class HttpProxyServer extends EventEmitter {
     try {
       channel = await this.link.openStream(url.hostname, port, 15000);
     } catch (error) {
-      return { ok: false, status: null, ms: Date.now() - started, note: (error as Error).message };
+      return { ok: false, status: null, ms: Date.now() - started, note: summarizeError(error, 200) };
     }
 
     if (url.protocol === 'https:') {
@@ -395,7 +403,7 @@ export class HttpProxyServer extends EventEmitter {
           done = true;
           clearTimeout(timer);
           channel.destroy();
-          resolve({ ok: false, status: null, ms: Date.now() - started, note: error.message });
+          resolve({ ok: false, status: null, ms: Date.now() - started, note: summarizeError(error, 200) });
         });
       });
     }
@@ -435,7 +443,7 @@ export class HttpProxyServer extends EventEmitter {
         if (done) return;
         done = true;
         cleanup();
-        resolve({ ok: false, status: null, ms: Date.now() - started, note: error.message });
+        resolve({ ok: false, status: null, ms: Date.now() - started, note: summarizeError(error, 200) });
       });
     });
   }

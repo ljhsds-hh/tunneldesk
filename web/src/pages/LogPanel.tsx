@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, formatDateTime } from '../api';
 import { IconRefresh, IconSearch } from '../icons';
 import { Badge, Button, CopyButton, Drawer, EmptyState } from '../ui';
 import { useApp } from '../App';
 import type { LogEntry } from '../types';
 
-type LevelFilter = 'all' | 'warn' | 'error';
+type LevelFilter = 'all' | 'problem' | 'error';
 
 const LEVEL_TONE: Record<LogEntry['level'], 'neutral' | 'warn' | 'danger'> = {
   info: 'neutral',
@@ -19,6 +19,19 @@ const LEVEL_TEXT: Record<LogEntry['level'], string> = {
   error: '错误',
 };
 
+/** Cheap equality check: same length and same tail entry means no new logs. */
+function isSameSnapshot(prev: LogEntry[], next: LogEntry[]): boolean {
+  if (prev.length !== next.length) return false;
+  if (prev.length === 0) return true;
+  const prevLast = prev[prev.length - 1];
+  const nextLast = next[next.length - 1];
+  return (
+    prevLast?.id === nextLast?.id &&
+    prevLast?.at === nextLast?.at &&
+    prevLast?.message === nextLast?.message
+  );
+}
+
 /**
  * Full in-memory log buffer (`GET /api/logs`). The SSE snapshot only carries
  * the last handful of entries so the stream stays small; this drawer is where
@@ -31,23 +44,31 @@ export function LogPanel({ open, onClose }: { open: boolean; onClose: () => void
   const [failed, setFailed] = useState<string | null>(null);
   const [level, setLevel] = useState<LevelFilter>('all');
   const [query, setQuery] = useState('');
+  const inFlight = useRef(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (showSpinner = false) => {
+    // Localhost is fast, but a slow request must not stack up behind the 3s
+    // interval or make the refresh button flicker on every poll.
+    if (inFlight.current) return;
+    inFlight.current = true;
+    if (showSpinner) setLoading(true);
     try {
       const result = await api.logs();
-      setEntries(result.logs);
+      // Skip the state update when nothing changed so a full re-render of the
+      // list is not triggered for no reason.
+      setEntries((prev) => (isSameSnapshot(prev, result.logs) ? prev : result.logs));
       setFailed(null);
     } catch (error) {
       setFailed((error as Error).message);
     } finally {
-      setLoading(false);
+      inFlight.current = false;
+      if (showSpinner) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (!open) return;
-    void load();
+    void load(true);
     const timer = window.setInterval(() => void load(), 3000);
     return () => window.clearInterval(timer);
   }, [open, load]);
@@ -56,7 +77,7 @@ export function LogPanel({ open, onClose }: { open: boolean; onClose: () => void
     const needle = query.trim().toLowerCase();
     const matched = entries.filter((entry) => {
       if (level === 'error' && entry.level !== 'error') return false;
-      if (level === 'warn' && entry.level === 'info') return false;
+      if (level === 'problem' && entry.level === 'info') return false;
       if (!needle) return true;
       return `${entry.scope} ${entry.message}`.toLowerCase().includes(needle);
     });
@@ -70,14 +91,19 @@ export function LogPanel({ open, onClose }: { open: boolean; onClose: () => void
     <Drawer
       open={open}
       title="运行日志"
-      subtitle={`内存中保留 ${entries.length} 条 · 同时按天写入本机文件`}
+      subtitle={`内存中保留 ${entries.length} 条 · 超长输出已自动截断 · 同时按天写入本机文件`}
       onClose={onClose}
       footer={
         <>
           <span className="muted small">
             显示 {visible.length} / {entries.length} 条
           </span>
-          <Button variant="secondary" icon={<IconRefresh />} loading={loading} onClick={() => void load()}>
+          <Button
+            variant="secondary"
+            icon={<IconRefresh />}
+            loading={loading}
+            onClick={() => void load(true)}
+          >
             刷新
           </Button>
         </>
@@ -89,8 +115,12 @@ export function LogPanel({ open, onClose }: { open: boolean; onClose: () => void
             <button className={level === 'all' ? 'is-active' : ''} onClick={() => setLevel('all')}>
               全部
             </button>
-            <button className={level === 'warn' ? 'is-active' : ''} onClick={() => setLevel('warn')}>
-              警告 {problems > 0 ? `(${problems})` : ''}
+            <button
+              className={level === 'problem' ? 'is-active' : ''}
+              title="显示警告与错误"
+              onClick={() => setLevel('problem')}
+            >
+              问题 {problems > 0 ? `(${problems})` : ''}
             </button>
             <button className={level === 'error' ? 'is-active' : ''} onClick={() => setLevel('error')}>
               错误
@@ -132,7 +162,9 @@ export function LogPanel({ open, onClose }: { open: boolean; onClose: () => void
               <span className="log-row__time mono">{formatDateTime(entry.at)}</span>
               <Badge tone={LEVEL_TONE[entry.level]}>{LEVEL_TEXT[entry.level]}</Badge>
               <span className="log-row__scope mono">{entry.scope}</span>
-              <span className="log-row__msg">{entry.message}</span>
+              <span className="log-row__msg" title={entry.message}>
+                {entry.message}
+              </span>
             </div>
           ))}
         </div>

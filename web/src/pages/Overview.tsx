@@ -312,7 +312,9 @@ export function OverviewPage() {
               <div key={entry.id} className={`activity__row activity__row--${entry.level}`}>
                 <span className="activity__time">{new Date(entry.at).toLocaleTimeString('zh-CN', { hour12: false })}</span>
                 <span className="activity__scope">{entry.scope}</span>
-                <span className="activity__msg">{entry.message}</span>
+                <span className="activity__msg" title={entry.message}>
+                  {entry.message}
+                </span>
               </div>
             ))}
           </div>

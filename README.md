@@ -190,7 +190,7 @@ A 能直连 B:22 时，直接选择「SSH 直连」，填写 B 的地址与 `22`
 - 远程命令通过 SSH `exec` + PowerShell `-EncodedCommand` 下发，避免引号注入；所有命令有超时与退出码检查。
 - Azure Bastion 的三个参数（Bastion 名称、资源组、VM 资源 ID）只保存在本机配置目录，日志、错误与诊断输出统一替换为 `***`；配置卡片默认打码。
 - RDP 密码只以 Windows DPAPI（CurrentUser）密文保存，`.rdp` 文件只写入密文对应的十六进制 blob，不落明文；程序退出时删除临时 `.rdp`。
-- 日志自动脱敏 `password=...` 与 PEM 私钥块。
+- 日志对 `password` / `token` / `secret` / `apiKey` / `--password` / `Bearer` 与 PEM 私钥块自动脱敏；每条日志压缩为单行并限制 600 字符，远程命令的原始多行输出不会再淹没日志。
 
 ---
 
@@ -200,7 +200,7 @@ A 能直连 B:22 时，直接选择「SSH 直连」，填写 B 的地址与 `22`
 | --- | --- |
 | 配置 | `%APPDATA%\TunnelDesk\config.json`（含 Azure Bastion 配置与 DPAPI 密码密文） |
 | 私钥 | `%APPDATA%\TunnelDesk\keys\` |
-| 运行日志 | `%APPDATA%\TunnelDesk\logs\tunneldesk-YYYY-MM-DD.log`（按天滚动，保留 7 天） |
+| 运行日志 | `%APPDATA%\TunnelDesk\logs\tunneldesk-YYYY-MM-DD.log`（一行一条，按天滚动，保留 7 天） |
 | 临时远程桌面文件 | `%APPDATA%\TunnelDesk\rdp\`（会话结束/程序退出时删除） |
 | 覆盖数据目录 | 环境变量 `TUNNELDESK_DATA_DIR`（测试/便携模式） |
 

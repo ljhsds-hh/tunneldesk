@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import type { HostConfig } from '../types.js';
 import { generateHostKey, openSshPublicKey } from './keys.js';
 import { connectClient, execOnClient, powershell } from './client.js';
+import { clampText, summarizeError, toSingleLine } from '../util/text.js';
 
 export interface ProvisionInput {
   id: string;
@@ -101,9 +102,8 @@ export async function provisionHost(input: ProvisionInput): Promise<ProvisionRes
 
     const result = await execOnClient(session.client, powershell(script), 25000);
     if (result.code !== 0 || !result.stdout.includes('KEY_OK')) {
-      throw new Error(
-        `写入 authorized_keys 失败：${(result.stderr || result.stdout).trim().slice(0, 400) || `退出码 ${result.code}`}`,
-      );
+      const detail = clampText(toSingleLine(result.stderr || result.stdout), 300) || `退出码 ${result.code}`;
+      throw new Error(`写入 authorized_keys 失败：${detail}`);
     }
 
     // Close the password session before opening the verification session.
@@ -120,11 +120,12 @@ export async function provisionHost(input: ProvisionInput): Promise<ProvisionRes
       });
       verify.client.end();
     } catch (error) {
-      const detail = result.stdout.includes('ADMIN_FILE_ERROR=')
-        ? ` 管理员公钥文件写入失败：${result.stdout.split('ADMIN_FILE_ERROR=')[1]?.split('\n')[0] ?? ''}`
+      const adminError = result.stdout.split('ADMIN_FILE_ERROR=')[1]?.split(/\r?\n/)[0] ?? '';
+      const detail = adminError
+        ? ` 管理员公钥文件写入失败：${clampText(toSingleLine(adminError), 200)}`
         : '';
       throw new Error(
-        `公钥已写入，但密钥登录验证失败：${(error as Error).message}。${detail} 请确认 B 的 OpenSSH 允许公钥登录。`,
+        `公钥已写入，但密钥登录验证失败：${summarizeError(error, 200)}。${detail} 请确认 B 的 OpenSSH 允许公钥登录。`,
       );
     }
 

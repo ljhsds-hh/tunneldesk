@@ -1,10 +1,5 @@
 import type { BastionProfile } from '../types.js';
-
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
-
-export function stripAnsi(text: string): string {
-  return text.replace(ANSI_PATTERN, '');
-}
+import { stripAnsi } from '../util/text.js';
 
 /** 三个敏感值（Bastion 名 / 资源组 / VM 资源 ID）。 */
 export function bastionSecrets(profile: Pick<BastionProfile, 'name' | 'resourceGroup' | 'targetResourceId'> | null): string[] {

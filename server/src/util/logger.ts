@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { LogEntry } from '../types.js';
+import { toSingleLine } from './text.js';
 
 export interface LoggerOptions {
   /** In-memory ring buffer size exposed to the console UI. */
@@ -32,9 +33,17 @@ const RESET = '\u001b[0m';
 const DIM = '\u001b[2m';
 
 /**
+ * Hard ceiling for a single message. Remote command output (PowerShell CLIXML,
+ * `az` failures) can be tens of thousands of characters; every entry is also
+ * copied into SSE snapshot frames, so unbounded text would flood the UI.
+ */
+const MAX_MESSAGE_LENGTH = 600;
+const MAX_SCOPE_LENGTH = 24;
+
+/**
  * Leveled logger with an in-memory ring buffer for the console UI and an
  * optional daily-rotated file sink for post-mortem debugging.
- * Secrets must never be passed to this logger.
+ * Secrets must still be avoided; the redaction below is only a safety net.
  */
 export class Logger extends EventEmitter {
   private readonly entries: LogEntry[] = [];
@@ -94,8 +103,8 @@ export class Logger extends EventEmitter {
       id: ++this.counter,
       at: now.toISOString(),
       level,
-      scope,
-      message: redact(message),
+      scope: normalizeScope(scope),
+      message: formatMessage(message),
     };
     this.entries.push(entry);
     if (this.entries.length > this.limit) {
@@ -190,8 +199,26 @@ function dateKey(at: Date): string {
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
 }
 
+function normalizeScope(scope: string): string {
+  const text = toSingleLine(String(scope ?? '')).replace(/\s+/g, ' ').trim();
+  return (text || 'app').slice(0, MAX_SCOPE_LENGTH);
+}
+
+/**
+ * Turns an arbitrary message into exactly one bounded line. Redaction happens
+ * before truncation so a cut can never leave a partial secret behind.
+ */
+function formatMessage(message: string): string {
+  const text = redact(toSingleLine(String(message ?? ''))) || '(空消息)';
+  if (text.length <= MAX_MESSAGE_LENGTH) return text;
+  const suffix = `…（已截断，原 ${text.length} 字符）`;
+  return `${text.slice(0, Math.max(0, MAX_MESSAGE_LENGTH - suffix.length))}${suffix}`;
+}
+
 function redact(message: string): string {
   return message
-    .replace(/(password|passwd|pwd)\s*[=:]\s*\S+/gi, '$1=[redacted]')
+    .replace(/"?(password|passwd|pwd|secret|token|api[-_]?key)"?\s*[=:]\s*("[^"]*"|'[^']*'|\S+)/gi, '$1=[redacted]')
+    .replace(/((?:--|-)(?:password|passwd|pwd|secret|token|api[-_]?key)\s+)("[^"]*"|'[^']*'|\S+)/gi, '$1[redacted]')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
     .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, '[redacted-key]');
 }

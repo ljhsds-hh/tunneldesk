@@ -15,6 +15,7 @@ import { newId } from '../util/paths.js';
 import { findFreePort, isPortFree } from '../util/net.js';
 import { killProcessTree, runCommand, runPowerShell } from '../util/process.js';
 import { Logger } from '../util/logger.js';
+import { clampText, summarizeError, toSingleLine } from '../util/text.js';
 import { BASTION_LOCAL_PORT, BASTION_RESOURCE_PORT, RDP_RESOURCE_PORT } from './command.js';
 import { buildRdpFile, writeRdpFile } from './rdp.js';
 import { maskSecrets } from './mask.js';
@@ -267,11 +268,13 @@ export class BastionManager extends EventEmitter {
   }
 
   private describeTunnelError(error: Error, profile: BastionProfile): string {
-    let message = maskSecrets(error.message, profile);
-    if (/提前退出/.test(message)) {
-      message += '。请查看 az 诊断输出，并确认已执行 az login、订阅与 VM 资源 ID 正确';
-    }
-    return message;
+    // `az` prints multi-line, localized output; keep one bounded line so it can
+    // safely reach the log file, SSE frames and the UI.
+    const full = toSingleLine(maskSecrets(error.message, profile)) || 'Azure Bastion 操作失败';
+    const hint = '。请查看 az 诊断输出，并确认已执行 az login、订阅与 VM 资源 ID 正确';
+    // Reserve room for the actionable hint instead of truncating it away.
+    if (/提前退出/.test(full)) return `${clampText(full, 400 - hint.length)}${hint}`;
+    return clampText(full, 400);
   }
 
   private async runStart(manual: boolean, epoch: number): Promise<boolean> {
@@ -412,7 +415,7 @@ export class BastionManager extends EventEmitter {
         timeoutMs: 20000,
       });
     } catch (error) {
-      throw new Error(`Azure CLI 无法执行：${(error as Error).message}`);
+      throw new Error(`Azure CLI 无法执行：${summarizeError(error, 200)}`);
     }
     if (result.code === 0) return;
     const text = maskSecrets(`${result.stderr}\n${result.stdout}`, profile);
@@ -444,7 +447,7 @@ export class BastionManager extends EventEmitter {
   private pushDiagnostic(line: string): void {
     const profile = this.options.profile() ?? this.lastProfile;
     if (profile) this.lastProfile = profile;
-    const text = maskSecrets(line, profile).slice(0, 1000);
+    const text = clampText(toSingleLine(maskSecrets(line, profile)), 500);
     this.diagnostics.push(text);
     if (this.diagnostics.length > DIAGNOSTIC_LIMIT) {
       this.diagnostics.splice(0, this.diagnostics.length - DIAGNOSTIC_LIMIT);
@@ -469,7 +472,10 @@ export class BastionManager extends EventEmitter {
     const session = this.rdpSessions.get(id);
     if (!session) return;
     session.info.state = 'failed';
-    session.info.lastError = maskSecrets(message, this.options.profile() ?? this.lastProfile);
+    session.info.lastError = clampText(
+      toSingleLine(maskSecrets(message, this.options.profile() ?? this.lastProfile)),
+      300,
+    );
     this.pushDiagnostic(`[RDP] ${message}`);
     await this.closeRdp(id);
   }

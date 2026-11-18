@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { Client, type ClientChannel } from 'ssh2';
 import type { HostConfig, LinkState } from '../types.js';
 import { Logger } from '../util/logger.js';
+import { summarizeError } from '../util/text.js';
 import { connectClient, execOnClient, type ExecResult } from './client.js';
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 15000, 30000];
@@ -166,7 +167,7 @@ export class SshLink extends EventEmitter {
       this.emit('online');
     } catch (error) {
       if (generation !== this.generation) return;
-      const message = (error as Error).message;
+      const message = summarizeError(error);
       this.lastError = message;
       this.client = null;
       this.logger.error('ssh', `连接失败：${message}`);
@@ -180,8 +181,9 @@ export class SshLink extends EventEmitter {
 
   private attachLifecycle(client: Client): void {
     client.on('error', (error: Error) => {
-      this.lastError = error.message;
-      this.logger.warn('ssh', `连接异常：${error.message}`);
+      const message = summarizeError(error);
+      this.lastError = message;
+      this.logger.warn('ssh', `连接异常：${message}`);
     });
     client.on('close', () => {
       if (this.client !== client) return;

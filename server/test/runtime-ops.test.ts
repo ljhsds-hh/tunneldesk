@@ -152,6 +152,41 @@ describe('FirewallManager.sync batching', () => {
     expect(manager.privilege).not.toBe('elevated');
   });
 
+  it('keeps one bounded line when many PowerShell errors come back', async () => {
+    const longError = `Access is denied ${'x'.repeat(400)}`;
+    const { link } = makeLink([], [], (names) =>
+      names.map((name) => `ERR|${name}|${longError}`).join('\r\n'),
+    );
+    const manager = new FirewallManager(link, new Logger({ mirrorToConsole: false }));
+    await manager.sync([
+      { mappingId: 'map_a', port: 3389, targetHost: '127.0.0.1', sync: true },
+      { mappingId: 'map_b', port: 5432, targetHost: '127.0.0.1', sync: true },
+    ]);
+
+    expect(manager.lastError).toContain('Access is denied');
+    expect(manager.lastError).toContain('另有 1 条失败');
+    expect(manager.lastError).not.toContain('\n');
+    expect(manager.lastError?.length ?? 0).toBeLessThanOrEqual(300);
+  });
+
+  it('detects a denied rule even when it is not the first failure', async () => {
+    const { link } = makeLink([], [], (names) =>
+      names
+        .map((name, index) => `ERR|${name}|${index === 0 ? 'The service cannot be started' : 'Access is denied'}`)
+        .join('\r\n'),
+    );
+    const manager = new FirewallManager(link, new Logger({ mirrorToConsole: false }));
+    await manager.sync([
+      { mappingId: 'map_a', port: 3389, targetHost: '127.0.0.1', sync: true },
+      { mappingId: 'map_b', port: 5432, targetHost: '127.0.0.1', sync: true },
+    ]);
+
+    expect(manager.privilege).toBe('denied');
+    // The displayed error stays the first one, bounded to one line.
+    expect(manager.lastError).toContain('The service cannot be started');
+    expect(manager.lastError).toContain('另有 1 条失败');
+  });
+
   it('does not recreate rules that are already current', async () => {
     const { link, scripts } = makeLink([
       ruleLine(ruleNameFor('map_a'), 'Inbound', 3389),

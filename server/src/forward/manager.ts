@@ -2,6 +2,7 @@ import net from 'node:net';
 import { EventEmitter } from 'node:events';
 import type { MappingConfig, MappingRuntime } from '../types.js';
 import { Logger } from '../util/logger.js';
+import { summarizeError } from '../util/text.js';
 import { SshLink } from '../ssh/link.js';
 
 interface ServerEntry {
@@ -32,7 +33,7 @@ function describeListenError(mapping: MappingConfig, error: NodeJS.ErrnoExceptio
   if (error.code === 'EADDRNOTAVAIL') {
     return `本机不存在地址 ${mapping.bindAddress}，请检查绑定地址`;
   }
-  return error.message;
+  return summarizeError(error, 200);
 }
 
 /**
@@ -151,7 +152,7 @@ export class ForwardManager extends EventEmitter {
       runtime.listening = false;
       // describeListenError() normally filled this in; a synchronous listen()
       // failure has no error event, so fall back to the thrown message.
-      const detail = runtime.lastError ?? (error as Error).message;
+      const detail = runtime.lastError ?? summarizeError(error, 200);
       runtime.lastError = detail;
       this.logger.error('forward', `监听 ${mapping.bindAddress}:${mapping.localPort} 失败：${detail}`);
       server.removeAllListeners('error');
@@ -210,10 +211,11 @@ export class ForwardManager extends EventEmitter {
         });
       })
       .catch((error: Error) => {
-        runtime.lastError = error.message;
+        const message = summarizeError(error);
+        runtime.lastError = message;
         finish();
         socket.destroy();
-        this.logger.warn('forward', `映射 ${mapping.name} 转发失败：${error.message}`);
+        this.logger.warn('forward', `映射 ${mapping.name} 转发失败：${message}`);
       });
   }
 

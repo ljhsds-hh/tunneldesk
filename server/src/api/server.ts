@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { App, AppError } from '../app.js';
 import { buildPacScript } from '../proxy/pac.js';
+import { summarizeError } from '../util/text.js';
 
 const MAX_BODY = 1024 * 1024;
 
@@ -79,7 +80,7 @@ async function handle(app: App, webDist: string | null, req: http.IncomingMessag
       sendJson(res, error.status, { error: error.message });
       return;
     }
-    const message = (error as Error).message ?? '服务器内部错误';
+    const message = summarizeError(error, 500);
     app.logger.error('api', message);
     sendJson(res, 500, { error: message });
   }

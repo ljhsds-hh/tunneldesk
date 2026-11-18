@@ -14,6 +14,7 @@ import type {
 } from './types.js';
 import { ConfigStore, clampPort, defaultConfig, ensureAppDirs, sanitizeProxy } from './config/store.js';
 import { Logger } from './util/logger.js';
+import { summarizeError } from './util/text.js';
 import { appDataDir, keysDir, newId } from './util/paths.js';
 import { isPortFree, isValidHostname, isValidPort } from './util/net.js';
 import { SshLink } from './ssh/link.js';
@@ -161,7 +162,7 @@ export class App extends EventEmitter {
       } else if (profile.autoStartTunnel) {
         this.logger.info('app', `正在启动 Azure Bastion 隧道（${BASTION_LOCAL_PORT}）`);
         void this.bastion.ensure().catch((error: Error) => {
-          this.logger.warn('bastion', `隧道自动启动失败：${error.message}`);
+          this.logger.warn('bastion', `隧道自动启动失败：${summarizeError(error)}`);
         });
       } else {
         this.logger.info('bastion', '自动启动已关闭，请先手动启动 50022 隧道');
@@ -271,7 +272,7 @@ export class App extends EventEmitter {
       try {
         await this.bastion.ensure();
       } catch (error) {
-        throw new AppError(`Azure Bastion 隧道不可用：${(error as Error).message}`, 502);
+        throw new AppError(`Azure Bastion 隧道不可用：${summarizeError(error, 400)}`, 502);
       }
     } else {
       if (!isValidHostname(host)) throw new AppError('主机地址不合法');
@@ -301,7 +302,7 @@ export class App extends EventEmitter {
         keysDir: keysDir(),
       });
     } catch (error) {
-      throw new AppError(`SSH 配置失败：${(error as Error).message}`, 502);
+      throw new AppError(`SSH 配置失败：${summarizeError(error, 500)}`, 502);
     }
 
     const now = new Date().toISOString();
@@ -328,7 +329,7 @@ export class App extends EventEmitter {
     this.link.disconnect();
     this.link.setAutoReconnect(this.store.get().settings.reconnect);
     await this.link.connect(record).catch((error: Error) => {
-      this.logger.warn('host', `首次连接失败：${error.message}`);
+      this.logger.warn('host', `首次连接失败：${summarizeError(error)}`);
     });
     return record;
   }
@@ -397,7 +398,7 @@ export class App extends EventEmitter {
     try {
       await this.prepareBastion(updated);
     } catch (error) {
-      this.logger.warn('host', `连接方式已切换，但隧道未就绪：${(error as Error).message}`);
+      this.logger.warn('host', `连接方式已切换，但隧道未就绪：${summarizeError(error)}`);
       return;
     }
     await this.link.connect(updated).catch(() => undefined);
@@ -441,7 +442,7 @@ export class App extends EventEmitter {
           this.logger.info('firewall', `删除主机 ${host.name} 前已清理 ${rulesCleaned} 条规则`);
         }
       } catch (error) {
-        cleanupNote = `有 ${ruleIds.length} 条 B 侧防火墙规则未能清理：${(error as Error).message}`;
+        cleanupNote = `有 ${ruleIds.length} 条 B 侧防火墙规则未能清理：${summarizeError(error)}`;
         this.logger.warn('firewall', cleanupNote);
       }
     }
@@ -581,7 +582,7 @@ export class App extends EventEmitter {
       const host = this.store.getActiveHost();
       if (host?.connectionType === 'azure-bastion' && profile.autoStartTunnel) {
         void this.bastion.ensure().catch((error: Error) => {
-          this.logger.warn('bastion', `隧道重新启动失败：${error.message}`);
+          this.logger.warn('bastion', `隧道重新启动失败：${summarizeError(error)}`);
         });
       }
     }
@@ -890,7 +891,7 @@ export class App extends EventEmitter {
    */
   private scheduleFirewallSync(): void {
     void this.syncFirewall().catch((error: Error) => {
-      this.logger.warn('firewall', `规则同步失败：${error.message}`);
+      this.logger.warn('firewall', `规则同步失败：${summarizeError(error)}`);
     });
   }
 
@@ -942,7 +943,7 @@ export class App extends EventEmitter {
     if (this.link.isOnline()) return;
     this.logger.info('app', 'Bastion 隧道已就绪，正在恢复 SSH 连接');
     await this.link.connect(host).catch((error: Error) => {
-      this.logger.warn('app', `SSH 连接失败：${error.message}`);
+      this.logger.warn('app', `SSH 连接失败：${summarizeError(error)}`);
     });
   }
 
@@ -955,7 +956,7 @@ export class App extends EventEmitter {
         this.logger.info('firewall', `规则已同步（新增 ${result.added}，清理 ${result.removed}）`);
       }
     } catch (error) {
-      this.logger.warn('firewall', `规则同步失败：${(error as Error).message}`);
+      this.logger.warn('firewall', `规则同步失败：${summarizeError(error)}`);
     }
     this.emit('change');
   }
