@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TunnelDesk">
+  <defs>
+    <linearGradient id="td-tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#141d14"/>
+      <stop offset="0.55" stop-color="#0c120c"/>
+      <stop offset="1" stop-color="#070a08"/>
+    </linearGradient>
+    <linearGradient id="td-arch" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2f0e5"/>
+      <stop offset="1" stop-color="#d8d6c9"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="62" height="62" rx="15" fill="url(#td-tile)"/>
+  <rect x="1.75" y="1.75" width="60.5" height="60.5" rx="14.25" fill="none" stroke="#c9f45b" stroke-opacity="0.3" stroke-width="1.5"/>
+  <rect x="3" y="3" width="58" height="58" rx="13" fill="none" stroke="#ffffff" stroke-opacity="0.05"/>
+  <path d="M16 48V31c0-8.84 7.16-16 16-16s16 7.16 16 16v17" fill="none" stroke="url(#td-arch)" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M25 48V32.6c0-3.87 3.13-7 7-7s7 3.13 7 7V48" fill="none" stroke="#c9f45b" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M9 49.5h46" stroke="#eceadf" stroke-opacity="0.22" stroke-width="2" stroke-linecap="round"/>
+</svg>

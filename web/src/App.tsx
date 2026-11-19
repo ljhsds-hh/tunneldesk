@@ -5,6 +5,7 @@ import {
   IconClose,
   IconGlobe,
   IconList,
+  IconLock,
   IconMoon,
   IconOverview,
   IconPorts,
@@ -53,13 +54,13 @@ export function useApp(): AppContextValue {
   return value;
 }
 
-const NAV: Array<{ key: Route; label: string; icon: JSX.Element; hint: string }> = [
-  { key: 'overview', label: '概览', icon: <IconOverview />, hint: '整体运行状态' },
-  { key: 'mappings', label: '端口映射', icon: <IconPorts />, hint: 'A 本地端口 → B' },
-  { key: 'quick', label: '映射一览', icon: <IconList />, hint: '按分组快速复制访问地址' },
-  { key: 'proxy', label: '内网代理', icon: <IconGlobe />, hint: '经 B 访问内网 HTTP' },
-  { key: 'connection', label: '连接管理', icon: <IconServer />, hint: '主机、密钥与防火墙' },
-  { key: 'settings', label: '设置', icon: <IconSettings />, hint: '偏好与数据' },
+const NAV: Array<{ key: Route; label: string; icon: JSX.Element; hint: string; index: string }> = [
+  { key: 'overview', label: '概览', icon: <IconOverview />, hint: '整体运行状态', index: '01' },
+  { key: 'mappings', label: '端口映射', icon: <IconPorts />, hint: 'A 本地端口 → B', index: '02' },
+  { key: 'quick', label: '映射一览', icon: <IconList />, hint: '按分组快速复制访问地址', index: '03' },
+  { key: 'proxy', label: '内网代理', icon: <IconGlobe />, hint: '经 B 访问内网 HTTP', index: '04' },
+  { key: 'connection', label: '连接管理', icon: <IconServer />, hint: '主机、密钥与防火墙', index: '05' },
+  { key: 'settings', label: '设置', icon: <IconSettings />, hint: '偏好与数据', index: '06' },
 ];
 
 function parseRoute(): Route {
@@ -184,6 +185,8 @@ export default function App() {
               : OverviewPage;
 
   const activeCount = snap?.mappings.filter((mapping) => mapping.enabled).length ?? 0;
+  const activeNav = NAV.find((item) => item.key === route) ?? NAV[0];
+  const clock = snap ? new Date(snap.serverTime).toLocaleTimeString('zh-CN', { hour12: false }) : '--:--:--';
 
   return (
     <AppContext.Provider value={value}>
@@ -191,10 +194,12 @@ export default function App() {
         <aside className="sidebar">
           <div className="brand">
             <span className="brand__mark">
-              <IconPorts size={20} />
+              <img src="/logo.svg" alt="" width={36} height={36} />
             </span>
             <span className="brand__text">
-              <strong>TunnelDesk</strong>
+              <strong>
+                TunnelDesk<span className="brand__tick" aria-hidden="true" />
+              </strong>
               <small>Secure Access Console</small>
             </span>
           </div>
@@ -210,8 +215,13 @@ export default function App() {
               >
                 <span className="nav__icon">{item.icon}</span>
                 <span className="nav__text">{item.label}</span>
-                {item.key === 'mappings' && activeCount > 0 ? <span className="nav__count">{activeCount}</span> : null}
-                {item.key === 'proxy' && snap?.proxy.enabled ? <span className="nav__live" /> : null}
+                {item.key === 'mappings' && activeCount > 0 ? (
+                  <span className="nav__count">{activeCount}</span>
+                ) : item.key === 'proxy' && snap?.proxy.enabled ? (
+                  <span className="nav__live" />
+                ) : (
+                  <span className="nav__index">{item.index}</span>
+                )}
               </button>
             ))}
           </nav>
@@ -240,6 +250,25 @@ export default function App() {
 
         <main className="main">
           <div className="main__glow" aria-hidden="true" />
+          <header className="topbar">
+            <div className="crumb">
+              <span>WORKSPACE</span>
+              <span>/</span>
+              <b>{activeNav.label}</b>
+            </div>
+            <div className="topbar__right">
+              <span className={`td-live${live === false ? ' td-live--lost' : ''}`}>
+                <i />
+                {live === false ? 'LINK LOST' : 'LIVE'}
+              </span>
+              <span className="topbar__time">{clock}</span>
+              <span className="local-chip" title="控制台仅监听本机回环地址，没有账号登录">
+                <IconLock size={12} />
+                <span>LOCAL</span>
+                <em>127.0.0.1</em>
+              </span>
+            </div>
+          </header>
           <div className="page" key={route}>
             <Page />
           </div>
